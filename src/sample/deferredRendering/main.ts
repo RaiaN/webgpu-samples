@@ -9,6 +9,9 @@ import vertexTextureQuad from './vertexTextureQuad.wgsl';
 import fragmentGBuffersDebugView from './fragmentGBuffersDebugView.wgsl';
 import fragmentDeferredRendering from './fragmentDeferredRendering.wgsl';
 
+import { ArcballCamera, WASDCamera, cameraSourceInfo } from './camera';
+import { createInputHandler, inputSourceInfo } from './input';
+
 const kMaxNumLights = 1024;
 const lightExtentMin = vec3.fromValues(-50, -30, -50);
 const lightExtentMax = vec3.fromValues(50, 50, 50);
@@ -18,6 +21,31 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
   const device = await adapter.requestDevice();
 
   if (!pageState.active) return;
+
+  // The input handler
+  const inputHandler = createInputHandler(window, canvas);
+
+  // The camera types
+  const initialCameraPosition = vec3.create(-80, 0, -80);
+  const cameras = {
+    arcball: new ArcballCamera({ position: initialCameraPosition }),
+    WASD: new WASDCamera({ position: initialCameraPosition }),
+  };
+
+  // GUI parameters
+  const params: { type: 'arcball' | 'WASD' } = {
+    type: 'arcball',
+  };
+
+  // Callback handler for camera mode
+  let oldCameraType = params.type;
+  gui.add(params, 'type', ['arcball', 'WASD']).onChange(() => {
+    // Copy the camera matrix from old to new
+    const newCameraType = params.type;
+    cameras[newCameraType].matrix = cameras[oldCameraType].matrix;
+    oldCameraType = newCameraType;
+  });
+
   const context = canvas.getContext('webgpu') as GPUCanvasContext;
 
   const devicePixelRatio = window.devicePixelRatio;
@@ -476,10 +504,7 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
   //--------------------
 
   // Scene matrices
-  const eyePosition = vec3.fromValues(0, 50, -100);
-  const upVector = vec3.fromValues(0, 1, 0);
-  const origin = vec3.fromValues(0, 0, 0);
-
+  // TODO: use orthographic?
   const projectionMatrix = mat4.perspective(
     (2 * Math.PI) / 5,
     aspect,
@@ -510,21 +535,24 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
   );
 
   // Rotates the camera around the origin based on time.
-  function getCameraViewProjMatrix() {
-    const rad = Math.PI * (Date.now() / 5000);
-    const rotation = mat4.rotateY(mat4.translation(origin), rad);
-    const rotatedEyePosition = vec3.transformMat4(eyePosition, rotation);
-
-    const viewMatrix = mat4.lookAt(rotatedEyePosition, origin, upVector);
+  function getCameraViewProjMatrix(deltaTime: number) {
+    const camera = cameras[params.type];
+    const viewMatrix = camera.update(deltaTime, inputHandler());
 
     return mat4.multiply(projectionMatrix, viewMatrix) as Float32Array;
   }
 
+  let lastFrameMS = Date.now();
+
   function frame() {
+    const now = Date.now();
+    const deltaTime = (now - lastFrameMS) / 1000;
+    lastFrameMS = now;
+
     // Sample is no longer the active page.
     if (!pageState.active) return;
 
-    const cameraViewProj = getCameraViewProjMatrix();
+    const cameraViewProj = getCameraViewProjMatrix(deltaTime);
     device.queue.writeBuffer(
       cameraUniformBuffer,
       0,
@@ -649,6 +677,8 @@ const DeferredRendering: () => JSX.Element = () =>
         contents: lightUpdate,
         editable: true,
       },
+      cameraSourceInfo,
+      inputSourceInfo,
     ],
     filename: __filename,
   });

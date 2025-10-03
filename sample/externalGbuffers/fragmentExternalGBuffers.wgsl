@@ -1,9 +1,8 @@
-@group(0) @binding(0) var gBufferAlbedo: texture_2d<f32>;
-@group(0) @binding(1) var gBufferNormal: texture_2d<f32>;
-@group(0) @binding(2) var gBufferDepth: texture_2d<f32>;
-@group(0) @binding(3) var gBufferSpecular: texture_2d<f32>;
-@group(0) @binding(4) var gBufferMetallic: texture_2d<f32>;
-@group(0) @binding(5) var gBufferSampler: sampler;
+@group(0) @binding(0) var gBufferAlbedo: texture_external;
+@group(0) @binding(1) var gBufferNormal: texture_external;
+@group(0) @binding(2) var gBufferDepth: texture_external;
+@group(0) @binding(3) var gBufferMetallicRoughness: texture_external;
+@group(0) @binding(4) var gBufferSampler: sampler;
 
 struct LightData {
   position :vec4f,
@@ -81,23 +80,21 @@ const PI: f32 = 3.14159265359;
 fn main(
   @builtin(position) coord: vec4f
 ) -> @location(0) vec4f {
-  let bufferSize = textureDimensions(gBufferDepth);
-  let coordUV = coord.xy / vec2f(bufferSize);
+  // Use normalized coordinates for external textures
+  let coordUV = coord.xy / vec2f(canvasSizeWidth, canvasSizeHeight);
   
   // Sample all G-Buffer data
-  let albedo_raw = textureSample(gBufferAlbedo, gBufferSampler, coordUV);
-  let normal_raw = textureSample(gBufferNormal, gBufferSampler, coordUV);
-  let depth_raw = textureSample(gBufferDepth, gBufferSampler, coordUV);
-  let specular_raw = textureSample(gBufferSpecular, gBufferSampler, coordUV);
-  let metallic_raw = textureSample(gBufferMetallic, gBufferSampler, coordUV);
+  let albedo_raw = textureSampleBaseClampToEdge(gBufferAlbedo, gBufferSampler, coordUV);
+  let normal_raw = textureSampleBaseClampToEdge(gBufferNormal, gBufferSampler, coordUV);
+  let depth_raw = textureSampleBaseClampToEdge(gBufferDepth, gBufferSampler, coordUV);
+  let metallicRoughness_raw = textureSampleBaseClampToEdge(gBufferMetallicRoughness, gBufferSampler, coordUV);
   
   // Extract material properties
   let albedo = toLinear(albedo_raw.rgb);
   let normal = normalize(normal_raw.xyz * 2.0 - 1.0); // Convert from [0,1] to [-1,1]
   let depth = depth_raw.r; // Assuming depth is stored in red channel
-  let specularColor = toLinear(specular_raw.rgb);
-  let metallic = metallic_raw.r;
-  let roughness = metallic_raw.g; // Assuming roughness is stored in green channel
+  let metallic = metallicRoughness_raw.r; // Metallic in red channel
+  let roughness = metallicRoughness_raw.g; // Roughness in green channel
   
   // Don't light the sky (assuming depth = 1.0 indicates sky)
   if (depth >= 1.0) {

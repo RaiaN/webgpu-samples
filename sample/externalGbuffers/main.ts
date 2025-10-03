@@ -8,9 +8,9 @@ import fragmentExternalGBuffers from './fragmentExternalGBuffers.wgsl';
 import fragmentExternalGBuffersDebugView from './fragmentExternalGBuffersDebugView.wgsl';
 
 // Import Video loader utilities
-import { loadGBufferVideos, VideoGBufferTextures, VideoGBufferConfig } from './videoLoader';
+import { loadGBufferVideos, VideoGBufferTextures, VideoGBufferConfig, createExternalTexturesFromVideos } from './videoLoader';
 
-const kMaxNumLights = 1024;
+const kMaxNumLights = 64; // Reduced for performance - external textures + deferred rendering can be expensive
 const lightExtentMin = vec3.fromValues(-50, -30, -50);
 const lightExtentMax = vec3.fromValues(50, 50, 50);
 
@@ -20,6 +20,7 @@ const adapter = await navigator.gpu?.requestAdapter({
 });
 const limits: Record<string, GPUSize32> = {};
 quitIfLimitLessThan(adapter, 'maxStorageBuffersInFragmentStage', 1, limits);
+quitIfLimitLessThan(adapter, 'maxSampledTexturesPerShaderStage', 16, limits);
 const device = await adapter?.requestDevice({
   requiredLimits: limits,
 });
@@ -40,6 +41,7 @@ context.configure({
 // Load external G-Buffer textures (Video only)
 let gBufferTextures: VideoGBufferTextures;
 let synchronizer: any = null;
+let videoElements: any = null;
 
 async function loadGbufferAssets() {
   // Video G-Buffer configuration
@@ -54,6 +56,7 @@ async function loadGbufferAssets() {
   try {
     gBufferTextures = await loadGBufferVideos(device, videoConfig, '../../assets/gbuffers/');
     synchronizer = (gBufferTextures as any).synchronizer;
+    videoElements = (gBufferTextures as any).videoElements;
     console.log('Successfully loaded G-Buffer video textures');
     console.log('Use GUI controls to adjust video playback');
   } catch (error) {
@@ -71,15 +74,10 @@ async function loadGbufferAssets() {
 await loadGbufferAssets();
 
 // Create texture views/resource arrays for the G-Buffers (Video only)
-let gBufferResources: GPUExternalTexture[];
-const videoTextures = gBufferTextures;
-gBufferResources = [
-  videoTextures.albedo,
-  videoTextures.normal, 
-  videoTextures.depth,
-  videoTextures.metallic, // specular replaced by metallic for video format
-  videoTextures.roughness || videoTextures.metallic, // fallback if roughness not available
-];
+// NOTE: We pack metallic+roughness into one external texture to stay within the 
+// 16 sampled texture limit (4 external textures × 4 planes = 16)
+// External textures must be recreated every frame
+let gBufferResources: GPUExternalTexture[] = [];
 
 // Create samplers
 const gBufferSampler = device.createSampler({
@@ -94,40 +92,25 @@ const gBufferTexturesBindGroupLayout = device.createBindGroupLayout({
     {
       binding: 0,
       visibility: GPUShaderStage.FRAGMENT,
-      texture: {
-        sampleType: 'float',
-      },
+      externalTexture: {},
     },
     {
       binding: 1,
       visibility: GPUShaderStage.FRAGMENT,
-      texture: {
-        sampleType: 'float',
-      },
+      externalTexture: {},
     },
     {
       binding: 2,
       visibility: GPUShaderStage.FRAGMENT,
-      texture: {
-        sampleType: 'float',
-      },
+      externalTexture: {},
     },
     {
       binding: 3,
       visibility: GPUShaderStage.FRAGMENT,
-      texture: {
-        sampleType: 'float',
-      },
+      externalTexture: {},
     },
     {
       binding: 4,
-      visibility: GPUShaderStage.FRAGMENT,
-      texture: {
-        sampleType: 'float',
-      },
-    },
-    {
-      binding: 5,
       visibility: GPUShaderStage.FRAGMENT,
       sampler: {},
     },
@@ -217,6 +200,10 @@ const externalGBuffersDeferredRenderPipeline = device.createRenderPipeline({
         format: presentationFormat,
       },
     ],
+    constants: {
+      canvasSizeWidth: canvas.width,
+      canvasSizeHeight: canvas.height,
+    },
   },
   primitive,
 });
@@ -235,7 +222,7 @@ const textureQuadPassDescriptor: GPURenderPassDescriptor = {
 
 const settings = {
   mode: 'rendering',
-  numLights: 128,
+  numLights: 16, // Reasonable default for deferred rendering with external textures
   videoPlaybackRate: 1.0,
 };
 
@@ -292,6 +279,11 @@ const cameraUniformBuffer = device.createBuffer({
 
 // G-Buffer textures bind group - needs to be recreated when switching modes
 function createGBufferBindGroup() {
+  // Validate all resources are present
+  if (gBufferResources.length !== 4 || gBufferResources.some(r => !r)) {
+    throw new Error('Invalid G-Buffer resources: expected 4 valid external textures');
+  }
+  
   return device.createBindGroup({
     layout: gBufferTexturesBindGroupLayout,
     entries: [
@@ -309,21 +301,17 @@ function createGBufferBindGroup() {
       },
       {
         binding: 3,
-        resource: gBufferResources[3], // metallic
+        resource: gBufferResources[3], // metallic+roughness
       },
       {
         binding: 4,
-        resource: gBufferResources[4], // roughness
-      },
-      {
-        binding: 5,
         resource: gBufferSampler,
       },
     ],
   });
 }
 
-let gBufferTexturesBindGroup = createGBufferBindGroup();
+let gBufferTexturesBindGroup: GPUBindGroup;
 
 // Lights data are uploaded in a storage buffer
 const extent = vec3.sub(lightExtentMax, lightExtentMin);
@@ -418,18 +406,18 @@ function getCameraViewProjMatrix() {
 }
 
 function frame() {
-  // Update video textures if needed (for GPUExternalTexture)
-  if (synchronizer && synchronizer.isPlaying) {
-    // Recreate external textures to update frame
-    const videoTextures = gBufferTextures;
-    gBufferResources = [
-      videoTextures.albedo,
-      videoTextures.normal, 
-      videoTextures.depth,
-      videoTextures.metallic,
-      videoTextures.roughness || videoTextures.metallic,
-    ];
-    gBufferTexturesBindGroup = createGBufferBindGroup();
+  // Recreate external textures every frame (they expire quickly)
+  if (videoElements) {
+    const newTextures = createExternalTexturesFromVideos(device, videoElements);
+    // Only update if we got valid textures (videos are ready)
+    if (newTextures.length === 4) {
+      gBufferResources = newTextures;
+      gBufferTexturesBindGroup = createGBufferBindGroup();
+    } else if (gBufferResources.length === 0) {
+      // Videos not ready yet, skip rendering this frame
+      requestAnimationFrame(frame);
+      return;
+    }
   }
 
   const cameraViewProj = getCameraViewProjMatrix();
@@ -449,6 +437,12 @@ function frame() {
     cameraInvViewProj.byteLength
   );
 
+  // Only render if we have valid bind group
+  if (!gBufferTexturesBindGroup) {
+    requestAnimationFrame(frame);
+    return;
+  }
+  
   const commandEncoder = device.createCommandEncoder();
   
   {

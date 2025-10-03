@@ -10,6 +10,15 @@ export interface VideoGBufferTextures {
   roughness: GPUExternalTexture;
 }
 
+export interface VideoGBufferElements {
+  albedo?: HTMLVideoElement;
+  normal?: HTMLVideoElement;
+  depth?: HTMLVideoElement;
+  metallic?: HTMLVideoElement;
+  roughness?: HTMLVideoElement;
+  synchronizer: VideoSynchronizer;
+}
+
 /**
  * Configuration for video G-Buffer inputs
  */
@@ -154,7 +163,7 @@ export async function loadGBufferVideos(
   const videos: Partial<VideoGBufferTextures> = {};
 
   // Create video elements for each G-Buffer type
-  const videoElements: { [K in keyof VideoGBufferConfig]-?: HTMLVideoElement } = {};
+  const videoElements: { [K in keyof VideoGBufferConfig]?: HTMLVideoElement } = {};
   
   if (config.albedo) {
     videoElements.albedo = createVideoElement(`${basePath}${config.albedo}`);
@@ -181,9 +190,9 @@ export async function loadGBufferVideos(
     synchronizer.addVideo('roughness', videoElements.roughness);
   }
 
-  // Wait for all videos to load metadata
+  // Wait for all videos to load and have frames ready
   await new Promise<void>((resolve, reject) => {
-    let loadedCount = 0;
+    const videoStates: Map<HTMLVideoElement, { metadataLoaded: boolean; framesReady: boolean }> = new Map();
     const totalVideos = Object.keys(videoElements).length;
     
     if (totalVideos === 0) {
@@ -191,13 +200,36 @@ export async function loadGBufferVideos(
       return;
     }
 
+    // Initialize video states
     Object.values(videoElements).forEach(video => {
+      videoStates.set(video, { metadataLoaded: false, framesReady: false });
+    });
+
+    const checkAllReady = () => {
+      const allReady = Array.from(videoStates.values()).every(state => 
+        state.metadataLoaded && state.framesReady
+      );
+      
+      if (allReady) {
+        // Start playing all videos to ensure first frame is available
+        synchronizer.play().then(() => {
+          // Wait a bit more to ensure frames are rendered
+          setTimeout(resolve, 100);
+        }).catch(reject);
+      }
+    };
+
+    Object.values(videoElements).forEach(video => {
+      const state = videoStates.get(video)!;
+      
       video.addEventListener('loadedmetadata', () => {
-        loadedCount++;
-        if (loadedCount === totalVideos) {
-          // Start playing all videos
-          synchronizer.play().then(resolve).catch(reject);
-        }
+        state.metadataLoaded = true;
+        checkAllReady();
+      });
+      
+      video.addEventListener('canplay', () => {
+        state.framesReady = true;
+        checkAllReady();
       });
       
       video.addEventListener('error', () => {
@@ -208,12 +240,26 @@ export async function loadGBufferVideos(
 
   // Create GPUExternalTexture for each video
   const createExternalTexture = (name: string, element: HTMLVideoElement) => {
-    return device.importExternalTexture({
-      source: element,
-      colorSpace: name === 'albedo' || name === 'metallic' || name === 'roughness' 
-        ? 'srgb' 
-        : 'display-p3', // Linear for normal/depth
-    });
+    // Ensure video has dimensions and is ready to play
+    if (element.videoWidth === 0 || element.videoHeight === 0) {
+      throw new Error(`Video "${name}" does not have valid dimensions`);
+    }
+    
+    if (element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      throw new Error(`Video "${name}" is not ready for texture import. ReadyState: ${element.readyState}`);
+    }
+    
+    try {
+      return device.importExternalTexture({
+        source: element,
+        colorSpace: name === 'albedo' || name === 'metallic' || name === 'roughness' 
+          ? 'srgb' 
+          : 'display-p3', // Linear for normal/depth
+      });
+    } catch (error) {
+      console.error(`Failed to import external texture for "${name}":`, error);
+      throw new Error(`Failed to import external texture for "${name}": ${error}`);
+    }
   };
 
   // Create external textures
@@ -233,11 +279,56 @@ export async function loadGBufferVideos(
     videos.roughness = createExternalTexture('roughness', videoElements.roughness);
   }
 
-  // Store synchronizer for external control
+  // Store synchronizer and video elements for external control
   (videos as any).synchronizer = synchronizer;
+  (videos as any).videoElements = videoElements;
 
   console.log('Successfully loaded G-Buffer video textures');
   return videos as VideoGBufferTextures;
+}
+
+/**
+ * Create external textures from video elements
+ * This should be called every frame as external textures expire quickly
+ */
+export function createExternalTexturesFromVideos(
+  device: GPUDevice,
+  videoElements: any
+): GPUExternalTexture[] {
+  // Validate all required videos are present
+  if (!videoElements.albedo || !videoElements.normal || !videoElements.depth || !videoElements.metallic) {
+    throw new Error('Missing required video elements for G-Buffer textures');
+  }
+  
+  // Check if videos are ready for texture import
+  const videos = [videoElements.albedo, videoElements.normal, videoElements.depth, videoElements.metallic];
+  for (const video of videos) {
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      console.warn('Video not ready for texture import, skipping frame');
+      return [];
+    }
+  }
+  
+  const textures: GPUExternalTexture[] = [
+    device.importExternalTexture({
+      source: videoElements.albedo,
+      colorSpace: 'srgb',
+    }),
+    device.importExternalTexture({
+      source: videoElements.normal,
+      colorSpace: 'display-p3',
+    }),
+    device.importExternalTexture({
+      source: videoElements.depth,
+      colorSpace: 'display-p3',
+    }),
+    device.importExternalTexture({
+      source: videoElements.metallic,
+      colorSpace: 'srgb',
+    }),
+  ];
+  
+  return textures;
 }
 
 /**

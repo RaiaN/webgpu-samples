@@ -1,9 +1,8 @@
-@group(0) @binding(0) var gBufferAlbedo: texture_2d<f32>;
-@group(0) @binding(1) var gBufferNormal: texture_2d<f32>;
-@group(0) @binding(2) var gBufferDepth: texture_2d<f32>;
-@group(0) @binding(3) var gBufferSpecular: texture_2d<f32>;
-@group(0) @binding(4) var gBufferMetallic: texture_2d<f32>;
-@group(0) @binding(5) var gBufferSampler: sampler;
+@group(0) @binding(0) var gBufferAlbedo: texture_external;
+@group(0) @binding(1) var gBufferNormal: texture_external;
+@group(0) @binding(2) var gBufferDepth: texture_external;
+@group(0) @binding(3) var gBufferMetallicRoughness: texture_external;
+@group(0) @binding(4) var gBufferSampler: sampler;
 
 override canvasSizeWidth: f32;
 override canvasSizeHeight: f32;
@@ -12,36 +11,55 @@ override canvasSizeHeight: f32;
 fn main(
   @builtin(position) coord: vec4f
 ) -> @location(0) vec4f {
-  var result: vec4f;
-  let bufferSize = textureDimensions(gBufferAlbedo);
-  let coordUV = coord.xy / vec2f(bufferSize);
+  // Use normalized coordinates for external textures
+  let coordUV = coord.xy / vec2f(canvasSizeWidth, canvasSizeHeight);
+  
+  // Sample all textures unconditionally for uniform control flow
+  let albedo = textureSampleBaseClampToEdge(gBufferAlbedo, gBufferSampler, coordUV);
+  let normal = textureSampleBaseClampToEdge(gBufferNormal, gBufferSampler, coordUV);
+  let depth = textureSampleBaseClampToEdge(gBufferDepth, gBufferSampler, coordUV);
+  let metallicRoughness = textureSampleBaseClampToEdge(gBufferMetallicRoughness, gBufferSampler, coordUV);
   
   // Divide screen into 5 horizontal sections to view each G-Buffer
   let sectionWidth = canvasSizeWidth / 5.0;
   let sectionIndex = floor(coord.x / sectionWidth);
   
-  if (sectionIndex == 0u) {
-    // Albedo
-    result = textureSample(gBufferAlbedo, gBufferSampler, coordUV);
-  } else if (sectionIndex == 1u) {
-    // Normal (convert from [-1,1] to [0,1] for visualization)
-    let normal = textureSample(gBufferNormal, gBufferSampler, coordUV);
-    result = vec4((normal.xyz + 1.0) * 0.5, 1.0);
-  } else if (sectionIndex == 2u) {
-    // Depth (remap for visibility)
-    let depth = textureSample(gBufferDepth, gBufferSampler, coordUV);
-    let remappedDepth = (1.0 - depth.x) * 50.0;
-    result = vec4(remappedDepth, remappedDepth, remappedDepth, 1.0);
-  } else if (sectionIndex == 3u) {
-    // Specular
-    let specular = textureSample(gBufferSpecular, gBufferSampler, coordUV);
-    result = vec4(specular.rgb, 1.0);
-  } else {
-    // Metallic (both metallic and roughness channels)
-    let metallic = textureSample(gBufferMetallic, gBufferSampler, coordUV);
-    // Red = metallic, Green = roughness, Blue = unused
-    result = vec4(metallic.rg, 0.0, 1.0);
-  }
+  // Initialize result vectors for each section
+  let albedo_result = albedo;
+  let normal_result = vec4((normal.xyz + 1.0) * 0.5, 1.0); // Convert from [-1,1] to [0,1]
+  let depth_remapped = (1.0 - depth.x) * 50.0;
+  let depth_result = vec4(depth_remapped, depth_remapped, depth_remapped, 1.0);
+  let metallic_result = vec4(metallicRoughness.r, metallicRoughness.r, metallicRoughness.r, 1.0); // Metallic in red channel
+  let roughness_result = vec4(metallicRoughness.g, metallicRoughness.g, metallicRoughness.g, 1.0); // Roughness in green channel
+  
+  // Use linear interpolation to blend between sections based on sectionIndex
+  var result: vec4f = albedo_result;
+  
+  // Smooth transitions between sections based on distance from section centers
+  let transitionWidth = sectionWidth * 0.1; // 10% transition zone
+  
+  // Calculate weights for each section
+  let dist_from_section_0 = abs(coord.x - sectionWidth * 0.5);
+  let dist_from_section_1 = abs(coord.x - sectionWidth * 1.5);
+  let dist_from_section_2 = abs(coord.x - sectionWidth * 2.5);
+  let dist_from_section_3 = abs(coord.x - sectionWidth * 3.5);
+  let dist_from_section_4 = abs(coord.x - sectionWidth * 4.5);
+  
+  let weight_0 = max(0.0, 1.0 - dist_from_section_0 / transitionWidth);
+  let weight_1 = max(0.0, 1.0 - dist_from_section_1 / transitionWidth);
+  let weight_2 = max(0.0, 1.0 - dist_from_section_2 / transitionWidth);
+  let weight_3 = max(0.0, 1.0 - dist_from_section_3 / transitionWidth);
+  let weight_4 = max(0.0, 1.0 - dist_from_section_4 / transitionWidth);
+  
+  // Normalize weights
+  let total_weight = weight_0 + weight_1 + weight_2 + weight_3 + weight_4;
+  let inv_total_weight = select(1.0 / total_weight, 1.0, total_weight == 0.0);
+  
+  result = (albedo_result * weight_0 + 
+            normal_result * weight_1 + 
+            depth_result * weight_2 + 
+            metallic_result * weight_3 + 
+            roughness_result * weight_4) * inv_total_weight;
   
   return result;
 }

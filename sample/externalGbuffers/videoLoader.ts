@@ -303,32 +303,39 @@ export function createExternalTexturesFromVideos(
   // Check if videos are ready for texture import
   const videos = [videoElements.albedo, videoElements.normal, videoElements.depth, videoElements.metallic];
   for (const video of videos) {
-    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-      console.warn('Video not ready for texture import, skipping frame');
+    // Ensure video has valid dimensions and current frame data
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || 
+        video.videoWidth === 0 || 
+        video.videoHeight === 0 ||
+        video.paused ||
+        video.ended) {
+      // Video not ready yet or not playing, skip this frame
       return [];
     }
   }
   
-  const textures: GPUExternalTexture[] = [
-    device.importExternalTexture({
-      source: videoElements.albedo,
-      colorSpace: 'srgb',
-    }),
-    device.importExternalTexture({
-      source: videoElements.normal,
-      colorSpace: 'display-p3',
-    }),
-    device.importExternalTexture({
-      source: videoElements.depth,
-      colorSpace: 'display-p3',
-    }),
-    device.importExternalTexture({
-      source: videoElements.metallic,
-      colorSpace: 'srgb',
-    }),
-  ];
-  
-  return textures;
+  // Create external textures - must be done right before use as they expire quickly
+  try {
+    const textures: GPUExternalTexture[] = [
+      device.importExternalTexture({
+        source: videoElements.albedo,
+      }),
+      device.importExternalTexture({
+        source: videoElements.normal,
+      }),
+      device.importExternalTexture({
+        source: videoElements.depth,
+      }),
+      device.importExternalTexture({
+        source: videoElements.metallic,
+      }),
+    ];
+    
+    return textures;
+  } catch (error) {
+    console.error('Failed to create external textures:', error);
+    return [];
+  }
 }
 
 /**

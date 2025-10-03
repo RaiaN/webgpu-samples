@@ -409,15 +409,19 @@ function frame() {
   // Recreate external textures every frame (they expire quickly)
   if (videoElements) {
     const newTextures = createExternalTexturesFromVideos(device, videoElements);
-    // Only update if we got valid textures (videos are ready)
+    // Only proceed if we got valid textures (videos are ready)
     if (newTextures.length === 4) {
       gBufferResources = newTextures;
       gBufferTexturesBindGroup = createGBufferBindGroup();
-    } else if (gBufferResources.length === 0) {
+    } else {
       // Videos not ready yet, skip rendering this frame
       requestAnimationFrame(frame);
       return;
     }
+  } else {
+    // Video elements not loaded yet
+    requestAnimationFrame(frame);
+    return;
   }
 
   const cameraViewProj = getCameraViewProjMatrix();
@@ -437,42 +441,43 @@ function frame() {
     cameraInvViewProj.byteLength
   );
 
-  // Only render if we have valid bind group
-  if (!gBufferTexturesBindGroup) {
-    requestAnimationFrame(frame);
-    return;
-  }
-  
-  const commandEncoder = device.createCommandEncoder();
-  
-  {
-    textureQuadPassDescriptor.colorAttachments[0].view = context
-      .getCurrentTexture()
-      .createView();
+  try {
+    const commandEncoder = device.createCommandEncoder();
     
-    if (settings.mode === 'gBuffers view') {
-      // External G-Buffers debug view
-      const debugViewPass = commandEncoder.beginRenderPass(
-        textureQuadPassDescriptor
-      );
-      debugViewPass.setPipeline(externalGBuffersDebugViewPipeline);
-      debugViewPass.setBindGroup(0, gBufferTexturesBindGroup);
-      debugViewPass.draw(6);
-      debugViewPass.end();
-    } else {
-      // External G-Buffers deferred rendering
-      const deferredRenderingPass = commandEncoder.beginRenderPass(
-        textureQuadPassDescriptor
-      );
-      deferredRenderingPass.setPipeline(externalGBuffersDeferredRenderPipeline);
-      deferredRenderingPass.setBindGroup(0, gBufferTexturesBindGroup);
-      deferredRenderingPass.setBindGroup(1, lightsBufferBindGroup);
-      deferredRenderingPass.draw(6);
-      deferredRenderingPass.end();
+    {
+      textureQuadPassDescriptor.colorAttachments[0].view = context
+        .getCurrentTexture()
+        .createView();
+      
+      if (settings.mode === 'gBuffers view') {
+        // External G-Buffers debug view
+        const debugViewPass = commandEncoder.beginRenderPass(
+          textureQuadPassDescriptor
+        );
+        debugViewPass.setPipeline(externalGBuffersDebugViewPipeline);
+        debugViewPass.setBindGroup(0, gBufferTexturesBindGroup);
+        debugViewPass.draw(6);
+        debugViewPass.end();
+      } else {
+        // External G-Buffers deferred rendering
+        const deferredRenderingPass = commandEncoder.beginRenderPass(
+          textureQuadPassDescriptor
+        );
+        deferredRenderingPass.setPipeline(externalGBuffersDeferredRenderPipeline);
+        deferredRenderingPass.setBindGroup(0, gBufferTexturesBindGroup);
+        deferredRenderingPass.setBindGroup(1, lightsBufferBindGroup);
+        deferredRenderingPass.draw(6);
+        deferredRenderingPass.end();
+      }
     }
+    
+    device.queue.submit([commandEncoder.finish()]);
+  } catch (error) {
+    console.error('Error during rendering:', error);
+    // Clear the bind group to force recreation next frame
+    gBufferTexturesBindGroup = undefined as any;
   }
   
-  device.queue.submit([commandEncoder.finish()]);
   requestAnimationFrame(frame);
 }
 

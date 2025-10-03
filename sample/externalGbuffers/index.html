@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deferred Rendering with External G-Buffers</title>
+    <style>
+      @import url(/css/SampleLayout.css);
+
+      canvas {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <header id="info">
+      <h2>Deferred Rendering with External G-Buffers</h2>
+      <div>
+        This example demonstrates deferred rendering using external G-Buffers loaded from PNG files.
+        The G-Buffers include albedo, normal, depth, specular, and metallic maps.
+        Use the GUI to switch between rendering and G-Buffer viewing modes.
+      </div>
+      <canvas></canvas>
+    </header>
+    <script src="../../node_modules/dat.gui/build/dat.gui.min.js"></script>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

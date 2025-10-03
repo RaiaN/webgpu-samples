@@ -10,6 +10,7 @@ import cornell from '../sample/cornell/meta';
 import computeBoids from '../sample/computeBoids/meta';
 import cubemap from '../sample/cubemap/meta';
 import deferredRendering from '../sample/deferredRendering/meta';
+import externalGbuffers from '../sample/externalGbuffers/meta';
 import fractalCube from '../sample/fractalCube/meta';
 import gameOfLife from '../sample/gameOfLife/meta';
 import generateMipmap from '../sample/generateMipmap/meta';
@@ -128,6 +129,7 @@ export const pageCategories: PageCategory[] = [
       normalMap,
       shadowMapping,
       deferredRendering,
+      externalGbuffers,
       particles,
       points,
       primitivePicking,

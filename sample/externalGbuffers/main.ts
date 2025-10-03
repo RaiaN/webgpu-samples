@@ -52,13 +52,13 @@ async function loadGbufferAssets() {
   };
 
   try {
-    gBufferTextures = await loadGBufferVideos(device, videoConfig, '../../assets/videos/');
+    gBufferTextures = await loadGBufferVideos(device, videoConfig, '../../assets/gbuffers/');
     synchronizer = (gBufferTextures as any).synchronizer;
     console.log('Successfully loaded G-Buffer video textures');
     console.log('Use GUI controls to adjust video playback');
   } catch (error) {
     console.error('Failed to load G-Buffer video textures:', error);
-    console.log('Please ensure the following video files exist in ./assets/videos/:');
+    console.log('Please ensure the following video files exist in ./assets/gbuffers/:');
     console.log('- albedo_colors.mp4');
     console.log('- normal_maps.mp4');
     console.log('- depth_buffer.mp4');

@@ -38,7 +38,7 @@ const videoConfig: VideoGBufferConfig = {
 };
 
 // Load videos
-const videoTextures = await loadGBufferVideos(device, videoConfig, './assets/videos/');
+const videoTextures = await loadGBufferVideos(device, videoConfig, './assets/gbuffers/');
 ```
 
 ### Switching Between PNG and Video Modes
@@ -120,7 +120,7 @@ async function setupGBuffers() {
       roughness: 'scene_roughness.mp4'
     };
     
-    gBufferTextures = await loadGBufferVideos(device, videoConfig, '../../assets/videos/');
+    gBufferTextures = await loadGBufferVideos(device, videoConfig, '../../assets/gbuffers/');
     synchronizer = (gBufferTextures as any).synchronizer;
   } else {
     gBufferTextures = await loadGBufferTextures(device, '../../assets/gbuffers/');

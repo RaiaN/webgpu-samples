@@ -17,6 +17,7 @@ export default {
       { path: 'fragmentExternalGBuffersDebugView.wgsl' },
       { path: 'vertexTextureQuad.wgsl' },
       { path: 'pngLoader.ts' },
+      { path: 'videoLoader.ts' },
     ],
   };
   

@@ -7,8 +7,8 @@ import vertexTextureQuad from './vertexTextureQuad.wgsl';
 import fragmentExternalGBuffers from './fragmentExternalGBuffers.wgsl';
 import fragmentExternalGBuffersDebugView from './fragmentExternalGBuffersDebugView.wgsl';
 
-// Import PNG loader utilities
-import { loadGBufferTextures, GBufferTextures } from './pngLoader';
+// Import Video loader utilities
+import { loadGBufferVideos, VideoGBufferTextures, VideoGBufferConfig } from './videoLoader';
 
 const kMaxNumLights = 1024;
 const lightExtentMin = vec3.fromValues(-50, -30, -50);
@@ -37,29 +37,48 @@ context.configure({
   format: presentationFormat,
 });
 
-// Load external G-Buffer textures
-let gBufferTextures: GBufferTextures;
-try {
-  gBufferTextures = await loadGBufferTextures(device, '../../assets/gbuffers/');
-  console.log('Successfully loaded external G-Buffer textures');
-} catch (error) {
-  console.error('Failed to load G-Buffer textures:', error);
-  console.log('Please ensure the following PNG files exist in ./assets/gbuffers/:');
-  console.log('- albedo.png');
-  console.log('- normal.png');
-  console.log('- depth.png');
-  console.log('- specular.png');
-  console.log('- metallic.png');
-  throw error;
+// Load external G-Buffer textures (Video only)
+let gBufferTextures: VideoGBufferTextures;
+let synchronizer: any = null;
+
+async function loadGbufferAssets() {
+  // Video G-Buffer configuration
+  const videoConfig: VideoGBufferConfig = {
+    albedo: 'albedo_colors.mp4',
+    depth: 'depth_buffer.mp4', 
+    metallic: 'metallic_values.mp4',
+    normal: 'normal_maps.mp4',
+    roughness: 'roughness_values.mp4'
+  };
+
+  try {
+    gBufferTextures = await loadGBufferVideos(device, videoConfig, '../../assets/videos/');
+    synchronizer = (gBufferTextures as any).synchronizer;
+    console.log('Successfully loaded G-Buffer video textures');
+    console.log('Use GUI controls to adjust video playback');
+  } catch (error) {
+    console.error('Failed to load G-Buffer video textures:', error);
+    console.log('Please ensure the following video files exist in ./assets/videos/:');
+    console.log('- albedo_colors.mp4');
+    console.log('- normal_maps.mp4');
+    console.log('- depth_buffer.mp4');
+    console.log('- metallic_values.mp4');
+    console.log('- roughness_values.mp4');
+    throw error;
+  }
 }
 
-// Create texture views for the G-Buffers
-const gBufferTextureViews = [
-  gBufferTextures.albedo.createView({ label: 'gbuffer texture albedo' }),
-  gBufferTextures.normal.createView({ label: 'gbuffer texture normal' }),
-  gBufferTextures.depth.createView({ label: 'gbuffer texture depth' }),
-  gBufferTextures.specular.createView({ label: 'gbuffer texture specular' }),
-  gBufferTextures.metallic.createView({ label: 'gbuffer texture metallic' }),
+await loadGbufferAssets();
+
+// Create texture views/resource arrays for the G-Buffers (Video only)
+let gBufferResources: GPUExternalTexture[];
+const videoTextures = gBufferTextures;
+gBufferResources = [
+  videoTextures.albedo,
+  videoTextures.normal, 
+  videoTextures.depth,
+  videoTextures.metallic, // specular replaced by metallic for video format
+  videoTextures.roughness || videoTextures.metallic, // fallback if roughness not available
 ];
 
 // Create samplers
@@ -217,6 +236,7 @@ const textureQuadPassDescriptor: GPURenderPassDescriptor = {
 const settings = {
   mode: 'rendering',
   numLights: 128,
+  videoPlaybackRate: 1.0,
 };
 
 const configUniformBuffer = (() => {
@@ -233,6 +253,7 @@ const configUniformBuffer = (() => {
 
 const gui = new GUI();
 gui.add(settings, 'mode', ['rendering', 'gBuffers view']);
+
 gui
   .add(settings, 'numLights', 1, kMaxNumLights)
   .step(1)
@@ -244,42 +265,65 @@ gui
     );
   });
 
+// Video-specific controls
+gui.add(settings, 'videoPlaybackRate', 0.1, 3.0).onChange(() => {
+  if (synchronizer) {
+    synchronizer.setPlaybackRate(settings.videoPlaybackRate);
+  }
+});
+
+gui.add({
+  button: () => synchronizer?.pause(),
+}, 'button').name('Pause Videos');
+
+gui.add({
+  button: () => synchronizer?.play(),
+}, 'button').name('Play Videos');
+
+gui.add({
+  button: () => synchronizer?.seek(0),
+}, 'button').name('Reset Videos');
+
 const cameraUniformBuffer = device.createBuffer({
   label: 'camera matrix uniform',
   size: 4 * 16 * 2, // two 4x4 matrix
   usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 });
 
-// G-Buffer textures bind group
-const gBufferTexturesBindGroup = device.createBindGroup({
-  layout: gBufferTexturesBindGroupLayout,
-  entries: [
-    {
-      binding: 0,
-      resource: gBufferTextureViews[0], // albedo
-    },
-    {
-      binding: 1,
-      resource: gBufferTextureViews[1], // normal
-    },
-    {
-      binding: 2,
-      resource: gBufferTextureViews[2], // depth
-    },
-    {
-      binding: 3,
-      resource: gBufferTextureViews[3], // specular
-    },
-    {
-      binding: 4,
-      resource: gBufferTextureViews[4], // metallic
-    },
-    {
-      binding: 5,
-      resource: gBufferSampler,
-    },
-  ],
-});
+// G-Buffer textures bind group - needs to be recreated when switching modes
+function createGBufferBindGroup() {
+  return device.createBindGroup({
+    layout: gBufferTexturesBindGroupLayout,
+    entries: [
+      {
+        binding: 0,
+        resource: gBufferResources[0], // albedo
+      },
+      {
+        binding: 1,
+        resource: gBufferResources[1], // normal
+      },
+      {
+        binding: 2,
+        resource: gBufferResources[2], // depth
+      },
+      {
+        binding: 3,
+        resource: gBufferResources[3], // metallic
+      },
+      {
+        binding: 4,
+        resource: gBufferResources[4], // roughness
+      },
+      {
+        binding: 5,
+        resource: gBufferSampler,
+      },
+    ],
+  });
+}
+
+let gBufferTexturesBindGroup = createGBufferBindGroup();
 
 // Lights data are uploaded in a storage buffer
 const extent = vec3.sub(lightExtentMax, lightExtentMin);
@@ -374,6 +418,20 @@ function getCameraViewProjMatrix() {
 }
 
 function frame() {
+  // Update video textures if needed (for GPUExternalTexture)
+  if (synchronizer && synchronizer.isPlaying) {
+    // Recreate external textures to update frame
+    const videoTextures = gBufferTextures;
+    gBufferResources = [
+      videoTextures.albedo,
+      videoTextures.normal, 
+      videoTextures.depth,
+      videoTextures.metallic,
+      videoTextures.roughness || videoTextures.metallic,
+    ];
+    gBufferTexturesBindGroup = createGBufferBindGroup();
+  }
+
   const cameraViewProj = getCameraViewProjMatrix();
   device.queue.writeBuffer(
     cameraUniformBuffer,

@@ -719,9 +719,74 @@ exportFolder.add({
   }
 }, 'stopExport').name('⏹ Stop Export');
 
+// Add divider
+const divider = document.createElement('div');
+divider.style.cssText = 'height: 1px; background: #333; margin: 8px 0;';
+exportFolder.domElement.appendChild(divider);
+
+// Quick export button (reset + start)
+exportFolder.add({
+  quickExport: async () => {
+    if (frameExporter.isActive()) {
+      console.warn('Export already in progress');
+      return;
+    }
+
+    if (!videoElements || !videoElements.albedo) {
+      alert('Videos not loaded yet!');
+      return;
+    }
+
+    // Pause and reset videos
+    synchronizer.pause();
+    synchronizer.seek(0);
+    
+    // Wait for videos to be ready at position 0
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Calculate total frames
+    const totalFrames = Math.floor(videoElements.albedo.duration * settings.exportFPS);
+    settings.exportTotalFrames = totalFrames;
+
+    console.log(`Quick Export: ${totalFrames} frames at ${settings.exportFPS} FPS`);
+    console.log(`Video duration: ${videoElements.albedo.duration.toFixed(2)}s`);
+
+    // Create progress indicator if needed
+    if (!exportProgressText) {
+      exportProgressText = document.createElement('div');
+      exportProgressText.style.cssText = 'padding: 5px; font-size: 11px; color: #4CAF50; font-weight: bold;';
+      exportFolder.domElement.appendChild(exportProgressText);
+    }
+    exportProgressText.textContent = 'Quick export starting...';
+    exportProgressText.style.color = '#4CAF50';
+
+    // Start export immediately
+    await frameExporter.startExport({
+      totalFrames: totalFrames,
+      outputPrefix: settings.exportPrefix,
+      onProgress: (current, total) => {
+        if (exportProgressText) {
+          const percent = ((current / total) * 100).toFixed(1);
+          exportProgressText.textContent = `Exporting: ${current}/${total} (${percent}%)`;
+        }
+      },
+      onComplete: () => {
+        if (exportProgressText) {
+          exportProgressText.textContent = `Export complete! ${totalFrames} frames saved`;
+          exportProgressText.style.color = '#4CAF50';
+        }
+        console.log('Quick export finished! All frames have been downloaded.');
+        // Resume normal playback
+        synchronizer.seek(0);
+        synchronizer.play();
+      }
+    });
+  }
+}, 'quickExport').name('🚀 Reset & Export All');
+
 const exportHelp = document.createElement('div');
 exportHelp.style.cssText = 'padding: 8px; font-size: 10px; color: #888; line-height: 1.4; border-top: 1px solid #333; margin-top: 5px;';
-exportHelp.innerHTML = '<b>How to export:</b><br>1. Set desired FPS<br>2. Click "Start Export"<br>3. Frames will auto-download<br>4. Wait for completion message';
+exportHelp.innerHTML = '<b>Quick Export:</b><br>• Click "🚀 Reset & Export All" for one-click export<br><br><b>Manual Export:</b><br>1. Set desired FPS<br>2. Position video where you want<br>3. Click "▶ Start Export"<br>4. Frames auto-download';
 exportFolder.domElement.appendChild(exportHelp);
 
 const cameraUniformBuffer = device.createBuffer({

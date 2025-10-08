@@ -19,14 +19,14 @@ const lightExtentMax = vec3.fromValues(50, 50, 50);
 // Directional lights configuration
 const kMaxNumDirectionalLights = 4; // Typically only need 1-3 directional lights (sun, moon, etc.)
 
-// Helper function to convert azimuth/elevation angles to direction vector
+// Helper function to convert yaw/pitch angles to direction vector
 function azimuthElevationToDirection(azimuthDeg: number, elevationDeg: number) {
   const azimuthRad = (azimuthDeg * Math.PI) / 180;
   const elevationRad = (elevationDeg * Math.PI) / 180;
   
   // Convert spherical coordinates to Cartesian
-  // Azimuth: 0° = +X, 90° = +Z, 180° = -X, 270° = -Z
-  // Elevation: -90° = down, 0° = horizon, +90° = up
+  // Yaw (Azimuth): 0° = +X, 90° = +Z, 180° = -X, 270° = -Z (horizontal rotation)
+  // Pitch (Elevation): -90° = down, 0° = horizon, +90° = up (vertical rotation)
   const x = Math.cos(elevationRad) * Math.cos(azimuthRad);
   const y = Math.sin(elevationRad);
   const z = Math.cos(elevationRad) * Math.sin(azimuthRad);
@@ -316,8 +316,8 @@ const numLightsControl = gui
 
 // Directional Light Controls (Main Sun/Light 0)
 const dirLightFolder = gui.addFolder('Directional Light 0');
-dirLightFolder.add(settings, 'light0Azimuth', 0, 360).name('Azimuth (°)').listen();
-dirLightFolder.add(settings, 'light0Elevation', -90, 90).name('Elevation (°)').listen();
+dirLightFolder.add(settings, 'light0Azimuth', 0, 360).name('Yaw (°)').listen();
+dirLightFolder.add(settings, 'light0Elevation', -90, 90).name('Pitch (°)').listen();
 dirLightFolder.add(settings, 'light0Intensity', 0, 10).name('Intensity').listen();
 dirLightFolder.addColor(
   {

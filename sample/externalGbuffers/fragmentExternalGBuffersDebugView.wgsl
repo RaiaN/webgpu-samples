@@ -1,8 +1,9 @@
-@group(0) @binding(0) var gBufferAlbedo: texture_external;
-@group(0) @binding(1) var gBufferNormal: texture_external;
-@group(0) @binding(2) var gBufferDepth: texture_external;
-@group(0) @binding(3) var gBufferMetallicRoughness: texture_external;
-@group(0) @binding(4) var gBufferSampler: sampler;
+@group(0) @binding(0) var gBufferBasecolor: texture_2d<f32>;
+@group(0) @binding(1) var gBufferNormal: texture_2d<f32>;
+@group(0) @binding(2) var gBufferDepth: texture_2d<f32>;
+@group(0) @binding(3) var gBufferMetallic: texture_2d<f32>;
+@group(0) @binding(4) var gBufferRoughness: texture_2d<f32>;
+@group(0) @binding(5) var gBufferSampler: sampler;
 
 override canvasSizeWidth: f32;
 override canvasSizeHeight: f32;
@@ -11,29 +12,30 @@ override canvasSizeHeight: f32;
 fn main(
   @builtin(position) coord: vec4f
 ) -> @location(0) vec4f {
-  // Use normalized coordinates for external textures
+  // Use normalized coordinates for texture sampling
   let coordUV = coord.xy / vec2f(canvasSizeWidth, canvasSizeHeight);
   
   // Sample all textures unconditionally for uniform control flow
-  let albedo = textureSampleBaseClampToEdge(gBufferAlbedo, gBufferSampler, coordUV);
-  let normal = textureSampleBaseClampToEdge(gBufferNormal, gBufferSampler, coordUV);
-  let depth = textureSampleBaseClampToEdge(gBufferDepth, gBufferSampler, coordUV);
-  let metallicRoughness = textureSampleBaseClampToEdge(gBufferMetallicRoughness, gBufferSampler, coordUV);
+  let basecolor = textureSample(gBufferBasecolor, gBufferSampler, coordUV);
+  let normal = textureSample(gBufferNormal, gBufferSampler, coordUV);
+  let depth = textureSample(gBufferDepth, gBufferSampler, coordUV);
+  let metallic = textureSample(gBufferMetallic, gBufferSampler, coordUV);
+  let roughness = textureSample(gBufferRoughness, gBufferSampler, coordUV);
   
   // Divide screen into 5 horizontal sections to view each G-Buffer
   let sectionWidth = canvasSizeWidth / 5.0;
   let sectionIndex = floor(coord.x / sectionWidth);
   
   // Initialize result vectors for each section
-  let albedo_result = albedo;
+  let basecolor_result = basecolor;
   let normal_result = vec4((normal.xyz + 1.0) * 0.5, 1.0); // Convert from [-1,1] to [0,1]
   let depth_remapped = (1.0 - depth.x) * 50.0;
   let depth_result = vec4(depth_remapped, depth_remapped, depth_remapped, 1.0);
-  let metallic_result = vec4(metallicRoughness.r, metallicRoughness.r, metallicRoughness.r, 1.0); // Metallic in red channel
-  let roughness_result = vec4(metallicRoughness.g, metallicRoughness.g, metallicRoughness.g, 1.0); // Roughness in green channel
+  let metallic_result = vec4(metallic.r, metallic.r, metallic.r, 1.0);
+  let roughness_result = vec4(roughness.r, roughness.r, roughness.r, 1.0);
   
   // Use linear interpolation to blend between sections based on sectionIndex
-  var result: vec4f = albedo_result;
+  var result: vec4f = basecolor_result;
   
   // Smooth transitions between sections based on distance from section centers
   let transitionWidth = sectionWidth * 0.1; // 10% transition zone
@@ -55,7 +57,7 @@ fn main(
   let total_weight = weight_0 + weight_1 + weight_2 + weight_3 + weight_4;
   let inv_total_weight = select(1.0 / total_weight, 1.0, total_weight == 0.0);
   
-  result = (albedo_result * weight_0 + 
+  result = (basecolor_result * weight_0 + 
             normal_result * weight_1 + 
             depth_result * weight_2 + 
             metallic_result * weight_3 + 

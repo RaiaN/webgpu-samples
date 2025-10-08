@@ -10,9 +10,9 @@ import fragmentExternalGBuffersDebugView from './fragmentExternalGBuffersDebugVi
 import lightGizmoShader from './lightGizmo.wgsl';
 import lightGizmo2DShader from './lightGizmo2D.wgsl';
 
-// Import Video loader utilities
-import { loadGBufferVideos, VideoGBufferTextures, VideoGBufferConfig, createExternalTexturesFromVideos } from './videoLoader';
-import { FrameExporter, calculateVideoFrames } from './frameExporter';
+// Import Image sequence loader utilities
+import { loadGBufferImages, ImageGBufferTextures, ImageGBufferConfig, ImageSequenceController } from './imageLoader';
+import { FrameExporter } from './frameExporter';
 
 // Point lights configuration
 const kMaxNumLights = 1; // Single point light for precise control
@@ -61,35 +61,35 @@ context.configure({
   format: presentationFormat,
 });
 
-// Load external G-Buffer textures (Video only)
-let gBufferTextures: VideoGBufferTextures;
-let synchronizer: any = null;
-let videoElements: any = null;
+// Load external G-Buffer textures (Image sequence)
+let gBufferTextures: ImageGBufferTextures;
+let imageSequenceController: ImageSequenceController;
 
 async function loadGbufferAssets() {
-  // Video G-Buffer configuration
-  const videoConfig: VideoGBufferConfig = {
-    albedo: 'albedo.mp4',
-    depth: 'depth.mp4', 
-    metallic: 'metallic.mp4',
-    normal: 'normal.mp4',
-    roughness: 'roughness.mp4'
+  // Image sequence G-Buffer configuration
+  const imageConfig: ImageGBufferConfig = {
+    basecolor: true,
+    depth: true,
+    metallic: true,
+    normal: true,
+    roughness: true
   };
 
   try {
-    gBufferTextures = await loadGBufferVideos(device, videoConfig, '../../assets/gbuffers/');
-    synchronizer = (gBufferTextures as any).synchronizer;
-    videoElements = (gBufferTextures as any).videoElements;
-    console.log('Successfully loaded G-Buffer video textures');
-    console.log('Use GUI controls to adjust video playback');
+    const result = await loadGBufferImages(device, imageConfig, '../../assets/gbuffers/4/');
+    gBufferTextures = result.textures;
+    imageSequenceController = result.controller;
+    console.log('Successfully loaded G-Buffer image sequence');
+    console.log(`Total frames: ${imageSequenceController.getTotalFrames()}`);
+    console.log('Use GUI controls to adjust playback');
   } catch (error) {
-    console.error('Failed to load G-Buffer video textures:', error);
-    console.log('Please ensure the following video files exist in ./assets/gbuffers/:');
-    console.log('- albedo.mp4');
-    console.log('- normal.mp4');
-    console.log('- depth.mp4');
-    console.log('- metallic.mp4');
-    console.log('- roughness.mp4');
+    console.error('Failed to load G-Buffer image sequence:', error);
+    console.log('Please ensure image sequence files exist in ./assets/gbuffers/4/:');
+    console.log('- 0000.0xxx.basecolor.jpg');
+    console.log('- 0000.0xxx.normal.jpg');
+    console.log('- 0000.0xxx.depth.jpg');
+    console.log('- 0000.0xxx.metallic.jpg');
+    console.log('- 0000.0xxx.roughness.jpg');
     throw error;
   }
 }
@@ -99,12 +99,6 @@ await loadGbufferAssets();
 // Initialize frame exporter
 const frameExporter = new FrameExporter(canvas, device);
 
-// Create texture views/resource arrays for the G-Buffers (Video only)
-// NOTE: We pack metallic+roughness into one external texture to stay within the 
-// 16 sampled texture limit (4 external textures × 4 planes = 16)
-// External textures must be recreated every frame
-let gBufferResources: GPUExternalTexture[] = [];
-
 // Create samplers
 const gBufferSampler = device.createSampler({
   label: 'gBuffer sampler',
@@ -112,31 +106,36 @@ const gBufferSampler = device.createSampler({
   minFilter: 'linear',
 });
 
-// Bind group layout for G-Buffer textures
+// Bind group layout for G-Buffer textures (regular textures)
 const gBufferTexturesBindGroupLayout = device.createBindGroupLayout({
   entries: [
     {
       binding: 0,
       visibility: GPUShaderStage.FRAGMENT,
-      externalTexture: {},
+      texture: { sampleType: 'float' },
     },
     {
       binding: 1,
       visibility: GPUShaderStage.FRAGMENT,
-      externalTexture: {},
+      texture: { sampleType: 'float' },
     },
     {
       binding: 2,
       visibility: GPUShaderStage.FRAGMENT,
-      externalTexture: {},
+      texture: { sampleType: 'float' },
     },
     {
       binding: 3,
       visibility: GPUShaderStage.FRAGMENT,
-      externalTexture: {},
+      texture: { sampleType: 'float' },
     },
     {
       binding: 4,
+      visibility: GPUShaderStage.FRAGMENT,
+      texture: { sampleType: 'float' },
+    },
+    {
+      binding: 5,
       visibility: GPUShaderStage.FRAGMENT,
       sampler: {},
     },
@@ -402,13 +401,14 @@ const settings = {
   mode: 'rendering',
   lightType: 'directional', // 'point' or 'directional'
   numLights: 1, // Single point light
-  videoPlaybackRate: 1.0,
+  playbackRate: 1.0,
   debugLights: false, // Toggle to visualize where lights are active
+  currentFrame: 0,
   // Frame export settings
   exportFrames: false,
   exportFPS: 30,
   exportPrefix: 'frame',
-  exportTotalFrames: 0, // Will be calculated from video duration
+  exportTotalFrames: 0, // Will be calculated from image sequence
   // Directional light 0 controls (main sun)
   light0Azimuth: 135, // Horizontal angle in degrees (0 = +X, 90 = +Z, 180 = -X, 270 = -Z)
   light0Elevation: 45, // Vertical angle in degrees (-90 = down, 0 = horizon, 90 = up)
@@ -610,38 +610,41 @@ if (settings.lightType === 'directional') {
   }
 }
 
-// Video-specific controls
-const videoFolder = gui.addFolder('Video Controls');
-videoFolder.add(settings, 'videoPlaybackRate', 0.1, 3.0).onChange(() => {
-  if (synchronizer) {
-    synchronizer.setPlaybackRate(settings.videoPlaybackRate);
+// Image sequence controls
+const sequenceFolder = gui.addFolder('Sequence Controls');
+sequenceFolder.add(settings, 'playbackRate', 0.1, 3.0).name('Playback Rate').onChange(() => {
+  if (imageSequenceController) {
+    imageSequenceController.setPlaybackRate(settings.playbackRate);
   }
 });
 
-videoFolder.add({
-  button: () => synchronizer?.pause(),
-}, 'button').name('Pause Videos');
+sequenceFolder.add(settings, 'currentFrame', 0, imageSequenceController.getTotalFrames() - 1, 1).name('Frame').listen().onChange((value: number) => {
+  if (imageSequenceController) {
+    imageSequenceController.seekToFrame(Math.floor(value));
+  }
+});
 
-videoFolder.add({
-  button: () => synchronizer?.play(),
-}, 'button').name('Play Videos');
+sequenceFolder.add({
+  button: () => imageSequenceController?.pause(),
+}, 'button').name('Pause');
 
-videoFolder.add({
-  button: () => synchronizer?.seek(0),
-}, 'button').name('Reset Videos');
+sequenceFolder.add({
+  button: () => imageSequenceController?.play(),
+}, 'button').name('Play');
 
-// Calculate total frames from video duration
-if (videoElements && videoElements.albedo) {
-  settings.exportTotalFrames = Math.floor(videoElements.albedo.duration * settings.exportFPS);
-}
+sequenceFolder.add({
+  button: () => {
+    imageSequenceController?.seekToFrame(0);
+    settings.currentFrame = 0;
+  },
+}, 'button').name('Reset to Frame 0');
+
+// Calculate total frames from image sequence
+settings.exportTotalFrames = imageSequenceController.getTotalFrames();
 
 // Frame Export Controls
 const exportFolder = gui.addFolder('Frame Export (PNG)');
-exportFolder.add(settings, 'exportFPS', 1, 60, 1).name('Target FPS').onChange(() => {
-  if (videoElements && videoElements.albedo) {
-    settings.exportTotalFrames = Math.floor(videoElements.albedo.duration * settings.exportFPS);
-  }
-});
+exportFolder.add(settings, 'exportFPS', 1, 60, 1).name('Target FPS');
 exportFolder.add(settings, 'exportTotalFrames').name('Total Frames').listen();
 exportFolder.add(settings, 'exportPrefix').name('Filename Prefix');
 
@@ -654,24 +657,25 @@ exportFolder.add({
       return;
     }
 
-    if (!videoElements || !videoElements.albedo) {
-      alert('Videos not loaded yet!');
+    if (!imageSequenceController) {
+      alert('Image sequence not loaded yet!');
       return;
     }
 
-    // Pause videos and seek to start
-    synchronizer.pause();
-    synchronizer.seek(0);
+    // Pause and seek to start
+    imageSequenceController.pause();
+    await imageSequenceController.seekToFrame(0);
+    settings.currentFrame = 0;
     
-    // Wait for videos to be ready at position 0
+    // Wait for images to be ready
     await new Promise(resolve => setTimeout(resolve, 200));
 
-    // Calculate total frames
-    const totalFrames = Math.floor(videoElements.albedo.duration * settings.exportFPS);
+    // Use the total frames from the image sequence
+    const totalFrames = imageSequenceController.getTotalFrames();
     settings.exportTotalFrames = totalFrames;
 
-    console.log(`Starting export of ${totalFrames} frames at ${settings.exportFPS} FPS`);
-    console.log(`Video duration: ${videoElements.albedo.duration.toFixed(2)}s`);
+    console.log(`Starting export of ${totalFrames} frames`);
+    console.log(`Sequence duration: ${imageSequenceController.getDuration().toFixed(2)}s`);
 
     // Create progress indicator
     if (!exportProgressText) {
@@ -698,8 +702,9 @@ exportFolder.add({
         }
         console.log('Export finished! All frames have been downloaded.');
         // Resume normal playback
-        synchronizer.seek(0);
-        synchronizer.play();
+        imageSequenceController.seekToFrame(0);
+        settings.currentFrame = 0;
+        imageSequenceController.play();
       }
     });
   }
@@ -713,8 +718,8 @@ exportFolder.add({
       exportProgressText.style.color = '#FF5722';
     }
     // Resume normal playback
-    if (synchronizer) {
-      synchronizer.play();
+    if (imageSequenceController) {
+      imageSequenceController.play();
     }
   }
 }, 'stopExport').name('⏹ Stop Export');
@@ -732,24 +737,25 @@ exportFolder.add({
       return;
     }
 
-    if (!videoElements || !videoElements.albedo) {
-      alert('Videos not loaded yet!');
+    if (!imageSequenceController) {
+      alert('Image sequence not loaded yet!');
       return;
     }
 
-    // Pause and reset videos
-    synchronizer.pause();
-    synchronizer.seek(0);
+    // Pause and reset
+    imageSequenceController.pause();
+    await imageSequenceController.seekToFrame(0);
+    settings.currentFrame = 0;
     
-    // Wait for videos to be ready at position 0
+    // Wait for images to be ready at frame 0
     await new Promise(resolve => setTimeout(resolve, 200));
 
-    // Calculate total frames
-    const totalFrames = Math.floor(videoElements.albedo.duration * settings.exportFPS);
+    // Get total frames
+    const totalFrames = imageSequenceController.getTotalFrames();
     settings.exportTotalFrames = totalFrames;
 
-    console.log(`Quick Export: ${totalFrames} frames at ${settings.exportFPS} FPS`);
-    console.log(`Video duration: ${videoElements.albedo.duration.toFixed(2)}s`);
+    console.log(`Quick Export: ${totalFrames} frames`);
+    console.log(`Sequence duration: ${imageSequenceController.getDuration().toFixed(2)}s`);
 
     // Create progress indicator if needed
     if (!exportProgressText) {
@@ -777,8 +783,9 @@ exportFolder.add({
         }
         console.log('Quick export finished! All frames have been downloaded.');
         // Resume normal playback
-        synchronizer.seek(0);
-        synchronizer.play();
+        imageSequenceController.seekToFrame(0);
+        settings.currentFrame = 0;
+        imageSequenceController.play();
       }
     });
   }
@@ -833,11 +840,10 @@ const lightGizmo2DBindGroup = device.createBindGroup({
   ],
 });
 
-// G-Buffer textures bind group - needs to be recreated when switching modes
+// G-Buffer textures bind group - created once with regular textures
 function createGBufferBindGroup() {
-  // Validate all resources are present
-  if (gBufferResources.length !== 4 || gBufferResources.some(r => !r)) {
-    throw new Error('Invalid G-Buffer resources: expected 4 valid external textures');
+  if (!gBufferTextures) {
+    throw new Error('G-Buffer textures not loaded');
   }
   
   return device.createBindGroup({
@@ -845,29 +851,33 @@ function createGBufferBindGroup() {
     entries: [
       {
         binding: 0,
-        resource: gBufferResources[0], // albedo
+        resource: gBufferTextures.basecolor.createView(),
       },
       {
         binding: 1,
-        resource: gBufferResources[1], // normal
+        resource: gBufferTextures.normal.createView(),
       },
       {
         binding: 2,
-        resource: gBufferResources[2], // depth
+        resource: gBufferTextures.depth.createView(),
       },
       {
         binding: 3,
-        resource: gBufferResources[3], // metallic+roughness
+        resource: gBufferTextures.metallic.createView(),
       },
       {
         binding: 4,
+        resource: gBufferTextures.roughness.createView(),
+      },
+      {
+        binding: 5,
         resource: gBufferSampler,
       },
     ],
   });
 }
 
-let gBufferTexturesBindGroup: GPUBindGroup;
+let gBufferTexturesBindGroup: GPUBindGroup = createGBufferBindGroup();
 
 // Lights data are uploaded in a storage buffer
 const extent = vec3.sub(lightExtentMax, lightExtentMin);
@@ -1134,22 +1144,13 @@ function getCameraViewProjMatrix() {
 }
 
 async function frame() {
-  // Recreate external textures every frame (they expire quickly)
-  if (videoElements) {
-    const newTextures = createExternalTexturesFromVideos(device, videoElements);
-    // Only proceed if we got valid textures (videos are ready)
-    if (newTextures.length === 4) {
-      gBufferResources = newTextures;
-      gBufferTexturesBindGroup = createGBufferBindGroup();
-    } else {
-      // Videos not ready yet, skip rendering this frame
-      requestAnimationFrame(frame);
-      return;
+  // Update image sequence if playing
+  if (imageSequenceController && imageSequenceController.isPlayingNow()) {
+    const currentTime = performance.now();
+    const updated = await imageSequenceController.update(currentTime);
+    if (updated) {
+      settings.currentFrame = imageSequenceController.getCurrentFrame();
     }
-  } else {
-    // Video elements not loaded yet
-    requestAnimationFrame(frame);
-    return;
   }
 
   const cameraViewProj = getCameraViewProjMatrix();
@@ -1255,13 +1256,14 @@ async function frame() {
     const captured = await frameExporter.captureFrame();
     
     if (captured) {
-      // Calculate the next frame time
-      const frameTime = frameExporter.getCurrentFrame() / settings.exportFPS;
+      // Advance to next frame
+      const nextFrame = frameExporter.getCurrentFrame();
       
-      // Seek to next frame
-      if (videoElements && videoElements.albedo) {
-        synchronizer.seek(frameTime);
-        // Wait for video to be ready at new position
+      // Seek to next frame in image sequence
+      if (imageSequenceController && nextFrame < imageSequenceController.getTotalFrames()) {
+        await imageSequenceController.seekToFrame(nextFrame);
+        settings.currentFrame = nextFrame;
+        // Wait for image to be ready
         await new Promise(resolve => setTimeout(resolve, 50));
       }
       

@@ -1,8 +1,9 @@
-@group(0) @binding(0) var gBufferAlbedo: texture_external;
-@group(0) @binding(1) var gBufferNormal: texture_external;
-@group(0) @binding(2) var gBufferDepth: texture_external;
-@group(0) @binding(3) var gBufferMetallicRoughness: texture_external;
-@group(0) @binding(4) var gBufferSampler: sampler;
+@group(0) @binding(0) var gBufferBasecolor: texture_2d<f32>;
+@group(0) @binding(1) var gBufferNormal: texture_2d<f32>;
+@group(0) @binding(2) var gBufferDepth: texture_2d<f32>;
+@group(0) @binding(3) var gBufferMetallic: texture_2d<f32>;
+@group(0) @binding(4) var gBufferRoughness: texture_2d<f32>;
+@group(0) @binding(5) var gBufferSampler: sampler;
 
 struct LightData {
   position :vec4f,
@@ -80,21 +81,22 @@ const PI: f32 = 3.14159265359;
 fn main(
   @builtin(position) coord: vec4f
 ) -> @location(0) vec4f {
-  // Use normalized coordinates for external textures
+  // Use normalized coordinates for texture sampling
   let coordUV = coord.xy / vec2f(canvasSizeWidth, canvasSizeHeight);
   
   // Sample all G-Buffer data
-  let albedo_raw = textureSampleBaseClampToEdge(gBufferAlbedo, gBufferSampler, coordUV);
-  let normal_raw = textureSampleBaseClampToEdge(gBufferNormal, gBufferSampler, coordUV);
-  let depth_raw = textureSampleBaseClampToEdge(gBufferDepth, gBufferSampler, coordUV);
-  let metallicRoughness_raw = textureSampleBaseClampToEdge(gBufferMetallicRoughness, gBufferSampler, coordUV);
+  let basecolor_raw = textureSample(gBufferBasecolor, gBufferSampler, coordUV);
+  let normal_raw = textureSample(gBufferNormal, gBufferSampler, coordUV);
+  let depth_raw = textureSample(gBufferDepth, gBufferSampler, coordUV);
+  let metallic_raw = textureSample(gBufferMetallic, gBufferSampler, coordUV);
+  let roughness_raw = textureSample(gBufferRoughness, gBufferSampler, coordUV);
   
   // Extract material properties
-  let albedo = toLinear(albedo_raw.rgb);
+  let albedo = toLinear(basecolor_raw.rgb);
   let normal = normalize(normal_raw.xyz * 2.0 - 1.0); // Convert from [0,1] to [-1,1]
   let depth = depth_raw.r; // Assuming depth is stored in red channel
-  let metallic = metallicRoughness_raw.r; // Metallic in red channel
-  let roughness = metallicRoughness_raw.g; // Roughness in green channel
+  let metallic = metallic_raw.r; // Metallic in red channel
+  let roughness = roughness_raw.r; // Roughness in red channel
   
   // Don't light the sky (assuming depth = 1.0 indicates sky)
   if (depth >= 1.0) {

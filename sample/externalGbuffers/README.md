@@ -1,116 +1,159 @@
 # External G-Buffer Implementation
 
-This implementation allows you to use external video files as G-Buffers for deferred rendering instead of generating them in real-time.
+This implementation allows you to use external image sequences as G-Buffers for deferred rendering instead of generating them in real-time.
 
-## Required Video Files
+## Required Image Sequence Files
 
-Place the following video files in a folder called `assets/gbuffers/` (relative to your web server root):
+Place image sequence files in a folder (e.g., `assets/gbuffers/4/`) with the following naming pattern:
 
-### 1. albedo_colors.mp4
-- **Purpose**: Surface color/albedo information over time
-- **Format**: Video file with RGBA frames (8-bit per channel)
+`0000.0xxx.<channel>.jpg`
+
+Where:
+- `0xxx` is the frame number (0000, 0001, 0002, etc.)
+- `<channel>` is one of: basecolor, normal, depth, metallic, roughness
+
+### 1. basecolor (0000.0xxx.basecolor.jpg)
+- **Purpose**: Surface color/albedo information per frame
+- **Format**: JPG images with RGB channels (8-bit per channel)
 - **Usage**: Base material color before lighting calculations
 - **Expected Range**: sRGB color space, values [0-1]
 
-### 2. normal_maps.mp4
-- **Purpose**: Surface normal vectors over time
-- **Format**: Video file with RGBA frames (8-bit per channel)
+### 2. normal (0000.0xxx.normal.jpg)
+- **Purpose**: Surface normal vectors per frame
+- **Format**: JPG images with RGB channels (8-bit per channel)
 - **Usage**: Surface orientation for lighting calculations
 - **Expected Range**: Normal vectors encoded as (x+1)/2, (y+1)/2, (z+1)/2, range [0-1]
 
-### 3. depth_buffer.mp4
-- **Purpose**: Depth buffer information over time
-- **Format**: Video file with depth channel
+### 3. depth (0000.0xxx.depth.jpg)
+- **Purpose**: Depth buffer information per frame
+- **Format**: JPG images with depth channel
 - **Usage**: World/view space depth for position reconstruction
 - **Expected Range**: Normalized depth values [0-1], where 1.0 = far plane
 
-### 4. metallic_values.mp4
-- **Purpose**: Metallic material properties over time
-- **Format**: Video file with RGBA frames (8-bit per channel)
+### 4. metallic (0000.0xxx.metallic.jpg)
+- **Purpose**: Metallic material properties per frame
+- **Format**: JPG images (8-bit per channel)
 - **Usage**: Metallic workflow for material definition
 - **Expected Range**: 
   - Metallic: 0.0 = dielectric, 1.0 = metallic
   - Typically ranges [0.0-1.0] with sharp transitions
 
-### 5. roughness_values.mp4
-- **Purpose**: Surface roughness information over time
-- **Format**: Video file with RGBA frames (8-bit per channel)
+### 5. roughness (0000.0xxx.roughness.jpg)
+- **Purpose**: Surface roughness information per frame
+- **Format**: JPG images (8-bit per channel)
 - **Usage**: Surface microsurface detail for lighting calculations
 - **Expected Range**: 
   - Roughness: 0.0 = perfectly smooth, 1.0 = completely rough
   - Typically ranges [0.0-1.0] with gradual variations
 
-## Video Format Guidelines
+## Image Sequence Format Guidelines
 
-### When Creating Your Own G-Buffer Videos:
+### When Creating Your Own G-Buffer Image Sequences:
 
-1. **Resolution**: All videos should have the same dimensions and frame rate
-2. **Format**: Use MP4 with H.264 encoding for compatibility
+1. **Resolution**: All images in the sequence should have the same dimensions
+2. **Format**: Use JPG format for compatibility
 3. **Color Space**: Use sRGB for color channels, linear for normal/depth
-4. **Precision**: 
-   - Use 8-bit per channel for video frames
-   - Maintain consistent encoding across all videos
-5. **Synchronization**: All videos must have the same duration and frame rate for proper playback
+4. **Naming**: Follow the exact naming pattern: `0000.0xxx.<channel>.jpg`
+5. **Frame Numbering**: Zero-padded 4-digit frame numbers (0000, 0001, 0002, etc.)
+6. **Consistency**: All channels must have the same number of frames
 
-### File Organization:
+### Example File Organization:
 ```
 project-root/
 ├── assets/
-│   └── videos/
-│       ├── albedo.mp4
-│       ├── normal.mp4
-│       ├── depth.mp4
-│       ├── metallic.mp4
-│       └── roughness.mp4
+│   └── gbuffers/
+│       └── 4/
+│           ├── 0000.0000.basecolor.jpg
+│           ├── 0000.0000.normal.jpg
+│           ├── 0000.0000.depth.jpg
+│           ├── 0000.0000.metallic.jpg
+│           ├── 0000.0000.roughness.jpg
+│           ├── 0000.0001.basecolor.jpg
+│           ├── 0000.0001.normal.jpg
+│           ├── ...
 └── sample/
     └── externalGbuffers/
         ├── index.html
         ├── main.ts
-        ├── videoLoader.ts
+        ├── imageLoader.ts
         ├── fragmentExternalGBuffers.wgsl
         └── ...
 ```
 
 ## Usage
 
-1. **Create the G-Buffer videos** using your preferred 3D software or video editor
-2. **Place them** in `assets/gbuffers/` directory with the correct filenames
+1. **Create the G-Buffer image sequences** using your preferred 3D software or rendering tool
+2. **Place them** in `assets/gbuffers/4/` directory with the correct naming pattern
 3. **Run** `index.html` in your browser
 4. **Switch modes** using the GUI:
-   - "rendering": Shows the final lit result with video playback
+   - "rendering": Shows the final lit result with sequence playback
    - "gBuffers view": Shows individual G-buffer channels for debugging
 5. **Control playback** using the GUI controls:
    - Adjust playback rate (0.1x to 3.0x)
-   - Pause/Play videos
-   - Reset to beginning
+   - Scrub through frames using the frame slider
+   - Pause/Play sequence
+   - Reset to frame 0
+6. **Adjust lighting**:
+   - Switch between directional and point lights
+   - Adjust light color, intensity, and position
+   - Use presets for common lighting scenarios
 
 ## Features
 
 - **PBR Lighting**: Physically Based Rendering with Cook-Torrance BRDF
-- **Multiple Lights**: Supports up to 1024 dynamic point lights
-- **Video Playback**: Real-time G-Buffer animation using video textures
-- **Debug View**: Visualize individual G-buffer channels
-- **Video Synchronization**: All G-Buffer videos are perfectly synchronized
+- **Multiple Light Types**: 
+  - Point lights with radius and attenuation
+  - Directional lights (sun-like) with azimuth/elevation controls
+- **Image Sequence Playback**: Real-time G-Buffer animation using image sequences
+- **Debug View**: Visualize individual G-buffer channels side-by-side
+- **Frame-by-Frame Control**: Precise frame scrubbing and playback
 - **External Pipeline**: No need to generate G-Buffers internally
-- **Flexible**: Easy to swap G-buffer videos for different animated scenes
-- **Interactive Controls**: Playback rate, pause/play, and seek capabilities
+- **Flexible**: Easy to swap G-buffer image sequences for different animated scenes
+- **Interactive Controls**: Full playback control, lighting adjustment, and frame export
+- **Frame Export**: Export rendered frames as PNG images
+
+## Configuration
+
+The image sequence path is configured in `main.ts`:
+
+```typescript
+const result = await loadGBufferImages(device, imageConfig, '../../assets/gbuffers/4/');
+```
+
+Change the path to point to your image sequence directory.
 
 ## Troubleshooting
 
 ### Common Issues:
 
-1. **File Not Found**: Ensure video files exist in `assets/gbuffers/` directory
-2. **Format Mismatch**: Verify video format (MP4/H.264) and codec compatibility
+1. **Images Not Found**: Ensure image files exist in the specified directory with correct naming pattern
+2. **Format Issues**: Verify all images are JPG format
 3. **CORS Issues**: Serve files from the same origin or configure CORS headers
-4. **Synchronization Issues**: Ensure all videos have the same duration and frame rate
-5. **Video Loading**: Check browser console for video loading errors
-6. **Buffer Size**: Reduce canvas size if WebGPU storage buffer limits are exceeded
+4. **Missing Frames**: Ensure all channels have the same number of frames
+5. **Naming Errors**: Double-check the naming pattern matches exactly: `0000.0xxx.<channel>.jpg`
+6. **Performance**: Large image sequences may take time to load; check browser console for progress
 
 ### Quality Tips:
 
-1. **Consistent encoding**: Use the same encoding settings for all G-Buffer videos
+1. **Consistent encoding**: Use the same encoding settings for all G-Buffer images
 2. **Proper depth encoding**: Ensure depth values represent realistic scene distances
-3. **Consistent resolution**: All videos should match your target render resolution
-4. **Material consistency**: Ensure metallic, roughness, and albedo values are physically plausible
-5. **Frame rate**: Use high frame rates (30-60 FPS) for smooth animation
-6. **Color accuracy**: Maintain consistent color space across all video channels
+3. **Consistent resolution**: All images should match your target render resolution
+4. **Material consistency**: Ensure metallic, roughness, and basecolor values are physically plausible
+5. **Frame rate**: The default playback is 30 FPS, adjustable in the GUI
+6. **Color accuracy**: Maintain consistent color space across all image channels
+7. **Compression**: JPG quality should be high enough to avoid artifacts in lighting calculations
+
+## Converting from Video to Image Sequence
+
+If you have video files and need to convert them to image sequences, you can use FFmpeg:
+
+```bash
+# Extract frames from video
+ffmpeg -i albedo.mp4 -q:v 2 0000.%04d.basecolor.jpg
+ffmpeg -i normal.mp4 -q:v 2 0000.%04d.normal.jpg
+ffmpeg -i depth.mp4 -q:v 2 0000.%04d.depth.jpg
+ffmpeg -i metallic.mp4 -q:v 2 0000.%04d.metallic.jpg
+ffmpeg -i roughness.mp4 -q:v 2 0000.%04d.roughness.jpg
+```
+
+Note: The `-q:v 2` flag sets high quality output. Adjust as needed.

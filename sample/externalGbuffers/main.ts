@@ -12,6 +12,7 @@ import lightGizmo2DShader from './lightGizmo2D.wgsl';
 
 // Import Video loader utilities
 import { loadGBufferVideos, VideoGBufferTextures, VideoGBufferConfig, createExternalTexturesFromVideos } from './videoLoader';
+import { FrameExporter, calculateVideoFrames } from './frameExporter';
 
 // Point lights configuration
 const kMaxNumLights = 1; // Single point light for precise control
@@ -94,6 +95,9 @@ async function loadGbufferAssets() {
 }
 
 await loadGbufferAssets();
+
+// Initialize frame exporter
+const frameExporter = new FrameExporter(canvas, device);
 
 // Create texture views/resource arrays for the G-Buffers (Video only)
 // NOTE: We pack metallic+roughness into one external texture to stay within the 
@@ -400,6 +404,11 @@ const settings = {
   numLights: 1, // Single point light
   videoPlaybackRate: 1.0,
   debugLights: false, // Toggle to visualize where lights are active
+  // Frame export settings
+  exportFrames: false,
+  exportFPS: 30,
+  exportPrefix: 'frame',
+  exportTotalFrames: 0, // Will be calculated from video duration
   // Directional light 0 controls (main sun)
   light0Azimuth: 135, // Horizontal angle in degrees (0 = +X, 90 = +Z, 180 = -X, 270 = -Z)
   light0Elevation: 45, // Vertical angle in degrees (-90 = down, 0 = horizon, 90 = up)
@@ -620,6 +629,100 @@ videoFolder.add({
 videoFolder.add({
   button: () => synchronizer?.seek(0),
 }, 'button').name('Reset Videos');
+
+// Calculate total frames from video duration
+if (videoElements && videoElements.albedo) {
+  settings.exportTotalFrames = Math.floor(videoElements.albedo.duration * settings.exportFPS);
+}
+
+// Frame Export Controls
+const exportFolder = gui.addFolder('Frame Export (PNG)');
+exportFolder.add(settings, 'exportFPS', 1, 60, 1).name('Target FPS').onChange(() => {
+  if (videoElements && videoElements.albedo) {
+    settings.exportTotalFrames = Math.floor(videoElements.albedo.duration * settings.exportFPS);
+  }
+});
+exportFolder.add(settings, 'exportTotalFrames').name('Total Frames').listen();
+exportFolder.add(settings, 'exportPrefix').name('Filename Prefix');
+
+let exportProgressText: HTMLElement | null = null;
+
+exportFolder.add({
+  startExport: async () => {
+    if (frameExporter.isActive()) {
+      console.warn('Export already in progress');
+      return;
+    }
+
+    if (!videoElements || !videoElements.albedo) {
+      alert('Videos not loaded yet!');
+      return;
+    }
+
+    // Pause videos and seek to start
+    synchronizer.pause();
+    synchronizer.seek(0);
+    
+    // Wait for videos to be ready at position 0
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Calculate total frames
+    const totalFrames = Math.floor(videoElements.albedo.duration * settings.exportFPS);
+    settings.exportTotalFrames = totalFrames;
+
+    console.log(`Starting export of ${totalFrames} frames at ${settings.exportFPS} FPS`);
+    console.log(`Video duration: ${videoElements.albedo.duration.toFixed(2)}s`);
+
+    // Create progress indicator
+    if (!exportProgressText) {
+      exportProgressText = document.createElement('div');
+      exportProgressText.style.cssText = 'padding: 5px; font-size: 11px; color: #4CAF50; font-weight: bold;';
+      exportFolder.domElement.appendChild(exportProgressText);
+    }
+    exportProgressText.textContent = 'Starting export...';
+
+    // Start export
+    await frameExporter.startExport({
+      totalFrames: totalFrames,
+      outputPrefix: settings.exportPrefix,
+      onProgress: (current, total) => {
+        if (exportProgressText) {
+          const percent = ((current / total) * 100).toFixed(1);
+          exportProgressText.textContent = `Exporting: ${current}/${total} (${percent}%)`;
+        }
+      },
+      onComplete: () => {
+        if (exportProgressText) {
+          exportProgressText.textContent = `Export complete! ${totalFrames} frames saved`;
+          exportProgressText.style.color = '#4CAF50';
+        }
+        console.log('Export finished! All frames have been downloaded.');
+        // Resume normal playback
+        synchronizer.seek(0);
+        synchronizer.play();
+      }
+    });
+  }
+}, 'startExport').name('▶ Start Export');
+
+exportFolder.add({
+  stopExport: () => {
+    frameExporter.stopExport();
+    if (exportProgressText) {
+      exportProgressText.textContent = 'Export stopped';
+      exportProgressText.style.color = '#FF5722';
+    }
+    // Resume normal playback
+    if (synchronizer) {
+      synchronizer.play();
+    }
+  }
+}, 'stopExport').name('⏹ Stop Export');
+
+const exportHelp = document.createElement('div');
+exportHelp.style.cssText = 'padding: 8px; font-size: 10px; color: #888; line-height: 1.4; border-top: 1px solid #333; margin-top: 5px;';
+exportHelp.innerHTML = '<b>How to export:</b><br>1. Set desired FPS<br>2. Click "Start Export"<br>3. Frames will auto-download<br>4. Wait for completion message';
+exportFolder.domElement.appendChild(exportHelp);
 
 const cameraUniformBuffer = device.createBuffer({
   label: 'camera matrix uniform',
@@ -965,7 +1068,7 @@ function getCameraViewProjMatrix() {
   return mat4.multiply(projectionMatrix, viewMatrix);
 }
 
-function frame() {
+async function frame() {
   // Recreate external textures every frame (they expire quickly)
   if (videoElements) {
     const newTextures = createExternalTexturesFromVideos(device, videoElements);
@@ -1081,7 +1184,32 @@ function frame() {
     gBufferTexturesBindGroup = undefined as any;
   }
   
-  requestAnimationFrame(frame);
+  // Handle frame export
+  if (frameExporter.isActive()) {
+    // Capture the current frame
+    const captured = await frameExporter.captureFrame();
+    
+    if (captured) {
+      // Calculate the next frame time
+      const frameTime = frameExporter.getCurrentFrame() / settings.exportFPS;
+      
+      // Seek to next frame
+      if (videoElements && videoElements.albedo) {
+        synchronizer.seek(frameTime);
+        // Wait for video to be ready at new position
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      
+      // Continue to next frame immediately
+      requestAnimationFrame(frame);
+    } else {
+      // Export finished or stopped
+      requestAnimationFrame(frame);
+    }
+  } else {
+    // Normal playback
+    requestAnimationFrame(frame);
+  }
 }
 
 // Mouse interaction for light manipulation

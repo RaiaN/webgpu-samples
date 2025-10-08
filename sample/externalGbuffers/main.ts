@@ -7,12 +7,14 @@ import vertexTextureQuad from './vertexTextureQuad.wgsl';
 import fragmentExternalGBuffers from './fragmentExternalGBuffers.wgsl';
 import fragmentExternalGBuffersDirectional from './fragmentExternalGBuffersDirectional.wgsl';
 import fragmentExternalGBuffersDebugView from './fragmentExternalGBuffersDebugView.wgsl';
+import lightGizmoShader from './lightGizmo.wgsl';
+import lightGizmo2DShader from './lightGizmo2D.wgsl';
 
 // Import Video loader utilities
 import { loadGBufferVideos, VideoGBufferTextures, VideoGBufferConfig, createExternalTexturesFromVideos } from './videoLoader';
 
 // Point lights configuration
-const kMaxNumLights = 64; // Reduced for performance - external textures + deferred rendering can be expensive
+const kMaxNumLights = 1; // Single point light for precise control
 const lightExtentMin = vec3.fromValues(-50, -30, -50);
 const lightExtentMax = vec3.fromValues(50, 50, 50);
 
@@ -259,6 +261,127 @@ const externalGBuffersDirectionalRenderPipeline = device.createRenderPipeline({
   primitive,
 });
 
+// Light Gizmo Pipeline
+const lightGizmoShaderModule = device.createShaderModule({
+  code: lightGizmoShader,
+});
+
+const lightGizmoUniformBuffer = device.createBuffer({
+  label: 'light gizmo uniforms',
+  size: Float32Array.BYTES_PER_ELEMENT * 8, // vec3 pos + f32 radius + vec3 color + f32 padding
+  usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+});
+
+const lightGizmoBindGroupLayout = device.createBindGroupLayout({
+  entries: [
+    {
+      binding: 0,
+      visibility: GPUShaderStage.VERTEX,
+      buffer: {
+        type: 'uniform',
+      },
+    },
+    {
+      binding: 1,
+      visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+      buffer: {
+        type: 'uniform',
+      },
+    },
+  ],
+});
+
+const lightGizmoPipeline = device.createRenderPipeline({
+  label: 'light gizmo',
+  layout: device.createPipelineLayout({
+    bindGroupLayouts: [lightGizmoBindGroupLayout],
+  }),
+  vertex: {
+    module: lightGizmoShaderModule,
+    entryPoint: 'vertexMain',
+  },
+  fragment: {
+    module: lightGizmoShaderModule,
+    entryPoint: 'fragmentMain',
+    targets: [
+      {
+        format: presentationFormat,
+        blend: {
+          color: {
+            srcFactor: 'src-alpha',
+            dstFactor: 'one-minus-src-alpha',
+            operation: 'add',
+          },
+          alpha: {
+            srcFactor: 'one',
+            dstFactor: 'one-minus-src-alpha',
+            operation: 'add',
+          },
+        },
+      },
+    ],
+  },
+  primitive: {
+    topology: 'triangle-list',
+    cullMode: 'none',
+  },
+});
+
+// Light Gizmo 2D Cross + Depth Ring Pipeline
+const lightGizmo2DShaderModule = device.createShaderModule({
+  code: lightGizmo2DShader,
+});
+
+const lightGizmo2DUniformBuffer = device.createBuffer({
+  label: 'light gizmo 2d uniforms',
+  size: Float32Array.BYTES_PER_ELEMENT * 4, // vec3 position + padding
+  usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+});
+
+const lightGizmo2DBindGroupLayout = device.createBindGroupLayout({
+  entries: [
+    {
+      binding: 0,
+      visibility: GPUShaderStage.VERTEX,
+      buffer: {
+        type: 'uniform',
+      },
+    },
+    {
+      binding: 1,
+      visibility: GPUShaderStage.VERTEX,
+      buffer: {
+        type: 'uniform',
+      },
+    },
+  ],
+});
+
+const lightGizmo2DPipeline = device.createRenderPipeline({
+  label: 'light gizmo 2d',
+  layout: device.createPipelineLayout({
+    bindGroupLayouts: [lightGizmo2DBindGroupLayout],
+  }),
+  vertex: {
+    module: lightGizmo2DShaderModule,
+    entryPoint: 'vertexMain',
+  },
+  fragment: {
+    module: lightGizmo2DShaderModule,
+    entryPoint: 'fragmentMain',
+    targets: [
+      {
+        format: presentationFormat,
+      },
+    ],
+  },
+  primitive: {
+    topology: 'triangle-list',
+    cullMode: 'none',
+  },
+  depthStencil: undefined,
+});
+
 const textureQuadPassDescriptor: GPURenderPassDescriptor = {
   colorAttachments: [
     {
@@ -274,7 +397,7 @@ const textureQuadPassDescriptor: GPURenderPassDescriptor = {
 const settings = {
   mode: 'rendering',
   lightType: 'directional', // 'point' or 'directional'
-  numLights: 2, // Used differently: directional uses fixed lights, point lights uses this for count
+  numLights: 1, // Single point light
   videoPlaybackRate: 1.0,
   debugLights: false, // Toggle to visualize where lights are active
   // Directional light 0 controls (main sun)
@@ -284,6 +407,18 @@ const settings = {
   light0ColorR: 1.0,
   light0ColorG: 0.95,
   light0ColorB: 0.9,
+  // Point light controls
+  // X = horizontal (left/right) - cyan cross arms
+  // Y = depth (forward/back) - manual control only
+  // Z = vertical (up/down) - yellow cross arms
+  pointLightX: 0,
+  pointLightY: -30,  // Closer to camera (negative depth)
+  pointLightZ: 30,   // Up
+  pointLightIntensity: 5.0,
+  pointLightRadius: 200.0,
+  pointLightColorR: 1.0,
+  pointLightColorG: 1.0,
+  pointLightColorB: 1.0,
 };
 
 const configUniformBuffer = (() => {
@@ -300,19 +435,6 @@ const configUniformBuffer = (() => {
 
 const gui = new GUI();
 gui.add(settings, 'mode', ['rendering', 'gBuffers view']);
-
-// Number of lights control (only for point lights)
-const numLightsControl = gui
-  .add(settings, 'numLights', 1, kMaxNumLights)
-  .step(1)
-  .name('Num Point Lights')
-  .onChange(() => {
-    device.queue.writeBuffer(
-      configUniformBuffer,
-      0,
-      new Uint32Array([settings.numLights])
-    );
-  });
 
 // Directional Light Controls (Main Sun/Light 0)
 const dirLightFolder = gui.addFolder('Directional Light 0');
@@ -381,39 +503,96 @@ dirLightFolder.add({
 
 dirLightFolder.open();
 
+// Point Light Controls
+const pointLightFolder = gui.addFolder('Point Light');
+// Add helpful text
+const gizmoHelp = document.createElement('div');
+gizmoHelp.style.cssText = 'padding: 5px; font-size: 10px; color: #888; line-height: 1.3;';
+gizmoHelp.innerHTML = 'Drag the gizmo:<br>• Cyan cross = Horizontal (X)<br>• Yellow cross = Vertical (Z)<br>• Center = Free 3D movement';
+pointLightFolder.domElement.appendChild(gizmoHelp);
+
+pointLightFolder.add(settings, 'pointLightX', -100, 100).name('X - Horizontal (Cyan ←→)').listen();
+pointLightFolder.add(settings, 'pointLightY', -100, 100).name('Y - Depth (Manual)').listen();
+pointLightFolder.add(settings, 'pointLightZ', -100, 100).name('Z - Vertical (Yellow ↑↓)').listen();
+pointLightFolder.add(settings, 'pointLightIntensity', 0, 20).name('Intensity').listen();
+pointLightFolder.add(settings, 'pointLightRadius', 10, 500).name('Radius').listen();
+pointLightFolder.addColor(
+  {
+    color: [
+      settings.pointLightColorR * 255,
+      settings.pointLightColorG * 255,
+      settings.pointLightColorB * 255
+    ]
+  },
+  'color'
+).name('Color').onChange((value: number[]) => {
+  settings.pointLightColorR = value[0] / 255;
+  settings.pointLightColorG = value[1] / 255;
+  settings.pointLightColorB = value[2] / 255;
+});
+
+// Quick presets for point lights
+pointLightFolder.add({
+  preset: () => {
+    settings.pointLightX = 0;      // Center
+    settings.pointLightY = -30;    // Depth (closer to camera)
+    settings.pointLightZ = 30;     // Up
+    settings.pointLightIntensity = 5.0;
+    settings.pointLightRadius = 200.0;
+    settings.pointLightColorR = 1.0;
+    settings.pointLightColorG = 1.0;
+    settings.pointLightColorB = 1.0;
+  }
+}, 'preset').name('💡 Center Front');
+
+pointLightFolder.add({
+  preset: () => {
+    settings.pointLightX = 40;     // Right side
+    settings.pointLightY = 0;      // Mid depth
+    settings.pointLightZ = 20;     // Mid height
+    settings.pointLightIntensity = 8.0;
+    settings.pointLightRadius = 150.0;
+    settings.pointLightColorR = 1.0;
+    settings.pointLightColorG = 0.7;
+    settings.pointLightColorB = 0.4;
+  }
+}, 'preset').name('🔥 Warm Side');
+
+pointLightFolder.add({
+  preset: () => {
+    settings.pointLightX = 0;      // Center
+    settings.pointLightY = 0;      // Mid depth
+    settings.pointLightZ = 50;     // High up
+    settings.pointLightIntensity = 10.0;
+    settings.pointLightRadius = 300.0;
+    settings.pointLightColorR = 1.0;
+    settings.pointLightColorG = 1.0;
+    settings.pointLightColorB = 1.0;
+  }
+}, 'preset').name('💡 Top Light');
+
 // Light type selector
 gui.add(settings, 'lightType', ['point', 'directional']).name('Light Type').onChange((value: string) => {
   // Show/hide controls based on light type using DOM
-  const numLightsElement = numLightsControl.domElement.parentElement?.parentElement;
+  const pointLightFolderElement = pointLightFolder.domElement.parentElement;
   const dirLightFolderElement = dirLightFolder.domElement.parentElement;
   
   if (value === 'directional') {
     // Hide point light controls, show directional light controls
-    if (numLightsElement) numLightsElement.style.display = 'none';
+    if (pointLightFolderElement) pointLightFolderElement.style.display = 'none';
     if (dirLightFolderElement) dirLightFolderElement.style.display = '';
-    settings.numLights = Math.min(settings.numLights, kMaxNumDirectionalLights);
   } else {
     // Show point light controls, hide directional light controls
-    if (numLightsElement) numLightsElement.style.display = '';
+    if (pointLightFolderElement) pointLightFolderElement.style.display = '';
     if (dirLightFolderElement) dirLightFolderElement.style.display = 'none';
-    // Set a reasonable default for point lights if currently low
-    if (settings.numLights < 8) {
-      settings.numLights = 16;
-    }
   }
-  
-  device.queue.writeBuffer(
-    configUniformBuffer,
-    0,
-    new Uint32Array([settings.numLights])
-  );
 });
 
 // Initially show/hide controls based on light type
 if (settings.lightType === 'directional') {
-  const numLightsElement = numLightsControl.domElement.parentElement?.parentElement;
-  if (numLightsElement) {
-    numLightsElement.style.display = 'none';
+  const pointLightFolderElement = pointLightFolder.domElement.parentElement;
+  if (pointLightFolderElement) {
+    pointLightFolderElement.style.display = 'none';
   }
 } else {
   const dirLightFolderElement = dirLightFolder.domElement.parentElement;
@@ -446,6 +625,44 @@ const cameraUniformBuffer = device.createBuffer({
   label: 'camera matrix uniform',
   size: 4 * 16 * 2, // two 4x4 matrix
   usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+});
+
+// Light Gizmo Bind Group (created after cameraUniformBuffer)
+const lightGizmoBindGroup = device.createBindGroup({
+  layout: lightGizmoBindGroupLayout,
+  entries: [
+    {
+      binding: 0,
+      resource: {
+        buffer: cameraUniformBuffer,
+      },
+    },
+    {
+      binding: 1,
+      resource: {
+        buffer: lightGizmoUniformBuffer,
+      },
+    },
+  ],
+});
+
+// Light Gizmo 2D Bind Group (created after cameraUniformBuffer)
+const lightGizmo2DBindGroup = device.createBindGroup({
+  layout: lightGizmo2DBindGroupLayout,
+  entries: [
+    {
+      binding: 0,
+      resource: {
+        buffer: cameraUniformBuffer,
+      },
+    },
+    {
+      binding: 1,
+      resource: {
+        buffer: lightGizmo2DUniformBuffer,
+      },
+    },
+  ],
 });
 
 // G-Buffer textures bind group - needs to be recreated when switching modes
@@ -492,33 +709,32 @@ const bufferSizeInByte =
 const lightsBuffer = device.createBuffer({
   label: 'lights storage',
   size: bufferSizeInByte,
-  usage: GPUBufferUsage.STORAGE,
+  usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, // Allow updates via writeBuffer
   mappedAtCreation: true,
 });
 
-// Randomly populate lights in a box range
+// Initialize single point light from settings
 const lightData = new Float32Array(lightsBuffer.getMappedRange());
 const tmpVec4 = vec4.create();
-let offset = 0;
-for (let i = 0; i < kMaxNumLights; i++) {
-  offset = lightDataStride * i;
-  // position
-  for (let i = 0; i < 3; i++) {
-    tmpVec4[i] = Math.random() * extent[i] + lightExtentMin[i];
-  }
-  tmpVec4[3] = 1;
-  lightData.set(tmpVec4, offset);
-  // color (increased intensity for more visible lighting)
-  tmpVec4[0] = Math.random() * 5 + 1; // 1-6 range
-  tmpVec4[1] = Math.random() * 5 + 1;
-  tmpVec4[2] = Math.random() * 5 + 1;
-  // radius (increased from 20 to 50 for broader coverage)
-  tmpVec4[3] = 250.0;
-  lightData.set(tmpVec4, offset + 4);
-}
+
+// Position (map user coordinates to world coordinates)
+// User: X=left/right, Y=depth, Z=up/down
+// World: X=left/right, Y=up/down, Z=depth
+tmpVec4[0] = settings.pointLightX;  // X stays as X
+tmpVec4[1] = settings.pointLightZ;  // User Z -> World Y
+tmpVec4[2] = settings.pointLightY;  // User Y -> World Z
+tmpVec4[3] = 1;
+lightData.set(tmpVec4, 0);
+
+// Color and radius
+tmpVec4[0] = settings.pointLightColorR * settings.pointLightIntensity;
+tmpVec4[1] = settings.pointLightColorG * settings.pointLightIntensity;
+tmpVec4[2] = settings.pointLightColorB * settings.pointLightIntensity;
+tmpVec4[3] = settings.pointLightRadius;
+lightData.set(tmpVec4, 4);
 lightsBuffer.unmap();
 
-console.log(`Initialized ${kMaxNumLights} point lights with radius 250 units and intensity 1-6`);
+console.log(`Initialized single point light at X:${settings.pointLightX}, Y(depth):${settings.pointLightY}, Z(up/down):${settings.pointLightZ}`);
 
 // ===== Directional Lights Buffer =====
 // Directional light data: vec3 direction, f32 intensity, vec3 color, f32 padding = 8 floats
@@ -615,6 +831,61 @@ function updateDirectionalLightsFromSettings() {
   device.queue.writeBuffer(directionalLightsBuffer, 0, tempData);
 }
 
+// Function to update point light from settings
+function updatePointLightFromSettings() {
+  const tempData = new Float32Array(lightDataStride);
+  
+  // Position (map user coordinates to world coordinates)
+  // User: X=left/right, Y=depth, Z=up/down
+  // World: X=left/right, Y=up/down, Z=depth
+  tempData[0] = settings.pointLightX;  // X stays as X
+  tempData[1] = settings.pointLightZ;  // User Z -> World Y
+  tempData[2] = settings.pointLightY;  // User Y -> World Z
+  tempData[3] = 1;
+  
+  // Color and radius
+  tempData[4] = settings.pointLightColorR * settings.pointLightIntensity;
+  tempData[5] = settings.pointLightColorG * settings.pointLightIntensity;
+  tempData[6] = settings.pointLightColorB * settings.pointLightIntensity;
+  tempData[7] = settings.pointLightRadius;
+  
+  device.queue.writeBuffer(lightsBuffer, 0, tempData);
+}
+
+// Function to update light gizmo uniforms
+function updateLightGizmoUniforms() {
+  const gizmoData = new Float32Array(8);
+  
+  // Position (map user coordinates to world coordinates)
+  // User: X=left/right, Y=depth, Z=up/down
+  // World: X=left/right, Y=up/down, Z=depth
+  gizmoData[0] = settings.pointLightX;  // X stays as X
+  gizmoData[1] = settings.pointLightZ;  // User Z -> World Y
+  gizmoData[2] = settings.pointLightY;  // User Y -> World Z
+  gizmoData[3] = settings.pointLightRadius; // radius
+  
+  // Color (normalized)
+  gizmoData[4] = settings.pointLightColorR;
+  gizmoData[5] = settings.pointLightColorG;
+  gizmoData[6] = settings.pointLightColorB;
+  gizmoData[7] = 0.0; // padding
+  
+  device.queue.writeBuffer(lightGizmoUniformBuffer, 0, gizmoData);
+}
+
+// Function to update light gizmo 2D uniforms
+function updateLightGizmo2DUniforms() {
+  const gizmo2DData = new Float32Array(4);
+  
+  // Position (map user coordinates to world coordinates)
+  gizmo2DData[0] = settings.pointLightX;  // X stays as X
+  gizmo2DData[1] = settings.pointLightZ;  // User Z -> World Y
+  gizmo2DData[2] = settings.pointLightY;  // User Y -> World Z
+  gizmo2DData[3] = 0.0; // padding
+  
+  device.queue.writeBuffer(lightGizmo2DUniformBuffer, 0, gizmo2DData);
+}
+
 const lightExtentBuffer = device.createBuffer({
   label: 'light extent uniform',
   size: 4 * 8,
@@ -688,14 +959,9 @@ const origin = vec3.fromValues(0, 0, 0);
 
 const projectionMatrix = mat4.perspective((2 * Math.PI) / 5, aspect, 1, 2000.0);
 
-// Rotates the camera around the origin based on time.
+// Camera stays fixed for easy light manipulation
 function getCameraViewProjMatrix() {
-  const rad = Math.PI * (Date.now() / 5000);
-  const rotation = mat4.rotateY(mat4.translation(origin), rad);
-  const rotatedEyePosition = vec3.transformMat4(eyePosition, rotation);
-
-  const viewMatrix = mat4.lookAt(rotatedEyePosition, origin, upVector);
-
+  const viewMatrix = mat4.lookAt(eyePosition, origin, upVector);
   return mat4.multiply(projectionMatrix, viewMatrix);
 }
 
@@ -735,9 +1001,13 @@ function frame() {
     cameraInvViewProj.byteLength
   );
 
-  // Update directional lights from user settings (if using directional lights)
+  // Update lights from user settings
   if (settings.lightType === 'directional') {
     updateDirectionalLightsFromSettings();
+  } else {
+    updatePointLightFromSettings();
+    updateLightGizmoUniforms();
+    updateLightGizmo2DUniforms();
   }
 
   try {
@@ -776,6 +1046,31 @@ function frame() {
         
         deferredRenderingPass.draw(6);
         deferredRenderingPass.end();
+        
+        // Render light gizmo for point lights
+        if (settings.lightType === 'point') {
+          const gizmoPass = commandEncoder.beginRenderPass({
+            colorAttachments: [
+              {
+                view: context.getCurrentTexture().createView(),
+                loadOp: 'load', // Don't clear, draw on top
+                storeOp: 'store',
+              },
+            ],
+          });
+          
+          // Draw center sphere gizmo
+          gizmoPass.setPipeline(lightGizmoPipeline);
+          gizmoPass.setBindGroup(0, lightGizmoBindGroup);
+          gizmoPass.draw(6);
+          
+          // Draw 2D cross controls
+          gizmoPass.setPipeline(lightGizmo2DPipeline);
+          gizmoPass.setBindGroup(0, lightGizmo2DBindGroup);
+          gizmoPass.draw(24); // Cross only (4 arms * 6 vertices)
+          
+          gizmoPass.end();
+        }
       }
     }
     
@@ -788,5 +1083,171 @@ function frame() {
   
   requestAnimationFrame(frame);
 }
+
+// Mouse interaction for light manipulation
+let isDraggingLight = false;
+let dragPlaneDistance = 0;
+let dragStartCameraPos = vec3.create();
+let dragStartCameraViewProj = mat4.create();
+let dragStartCameraInvViewProj = mat4.create();
+let dragAxis: 'none' | 'horizontal' | 'vertical' = 'none'; // Which control is being dragged
+// 'horizontal' = X axis (left/right), 'vertical' = Z axis (up/down)
+let dragStartLightPos = vec3.create();
+let dragStartMouseX = 0;
+let dragStartMouseY = 0;
+
+// Helper function to check if mouse is near the gizmo controls
+function getGizmoHitType(mouseX: number, mouseY: number, lightPosWorld: Float32Array, cameraViewProj: Float32Array): 'none' | 'horizontal' | 'vertical' | 'center' {
+  // Project light position to screen
+  const lightClipPos = vec4.transformMat4(vec4.fromValues(lightPosWorld[0], lightPosWorld[1], lightPosWorld[2], 1), cameraViewProj);
+  const lightScreenX = (lightClipPos[0] / lightClipPos[3] + 1) * 0.5;
+  const lightScreenY = (1 - lightClipPos[1] / lightClipPos[3]) * 0.5;
+  
+  const dx = mouseX - lightScreenX;
+  const dy = mouseY - lightScreenY;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  
+  // Check vertical cross arms (yellow - up/down for Z)
+  if (Math.abs(dx) < 0.015 && Math.abs(dy) < 0.15) {
+    return 'vertical';
+  }
+  
+  // Check horizontal cross arms (cyan - left/right for X)
+  if (Math.abs(dy) < 0.015 && Math.abs(dx) < 0.15) {
+    return 'horizontal';
+  }
+  
+  // Check center sphere
+  if (dist < 0.05) {
+    return 'center';
+  }
+  
+  return 'none';
+}
+
+canvas.addEventListener('mousedown', (event) => {
+  if (settings.lightType !== 'point') return;
+  
+  // Check if clicking near the light gizmo
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = (event.clientX - rect.left) / rect.width;
+  const mouseY = (event.clientY - rect.top) / rect.height;
+  const mouseScreen = vec3.fromValues(mouseX, mouseY, 0);
+  
+  // Get light position in world space
+  const lightPosWorld = vec3.fromValues(settings.pointLightX, settings.pointLightZ, settings.pointLightY);
+  const cameraViewProj = getCameraViewProjMatrix();
+  
+  // Check what part of the gizmo was clicked
+  const hitType = getGizmoHitType(mouseX, mouseY, lightPosWorld, cameraViewProj);
+  
+  if (hitType !== 'none') {
+    isDraggingLight = true;
+    dragAxis = hitType === 'center' ? 'none' : hitType;
+    // Store the current distance from origin for plane projection
+    dragPlaneDistance = vec3.length(lightPosWorld);
+    dragStartLightPos = vec3.copy(lightPosWorld);
+    dragStartMouseX = mouseX;
+    dragStartMouseY = mouseY;
+    
+    // Capture camera state at drag start (camera is static for point lights)
+    dragStartCameraPos = vec3.copy(eyePosition);
+    dragStartCameraViewProj = mat4.copy(cameraViewProj);
+    dragStartCameraInvViewProj = mat4.invert(dragStartCameraViewProj);
+    
+    canvas.style.cursor = 'grab';
+  }
+});
+
+canvas.addEventListener('mousemove', (event) => {
+  if (!isDraggingLight) {
+    // Update cursor when hovering over the light
+    if (settings.lightType === 'point') {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = (event.clientX - rect.left) / rect.width;
+      const mouseY = (event.clientY - rect.top) / rect.height;
+      
+      const lightPos = vec3.fromValues(settings.pointLightX, settings.pointLightZ, settings.pointLightY);
+      const cameraViewProj = getCameraViewProjMatrix();
+      
+      const hitType = getGizmoHitType(mouseX, mouseY, lightPos, cameraViewProj);
+      canvas.style.cursor = hitType !== 'none' ? 'pointer' : 'default';
+    }
+    return;
+  }
+  
+  canvas.style.cursor = 'grabbing';
+  
+  // Convert mouse position to normalized coordinates
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = (event.clientX - rect.left) / rect.width;
+  const mouseY = (event.clientY - rect.top) / rect.height;
+  
+  // Calculate mouse delta from drag start
+  const deltaX = (mouseX - dragStartMouseX) * 200; // Scale factor for movement speed
+  const deltaY = (mouseY - dragStartMouseY) * 200;
+  
+  let newLightPosWorld: Float32Array;
+  
+  if (dragAxis === 'none') {
+    // Free movement - use mouse delta to move in screen space
+    const mouseNDC = vec3.fromValues(mouseX * 2 - 1, (1 - mouseY) * 2 - 1, 0);
+    const nearPoint = vec4.fromValues(mouseNDC[0], mouseNDC[1], -1, 1);
+    const farPoint = vec4.fromValues(mouseNDC[0], mouseNDC[1], 1, 1);
+    
+    const nearWorld = vec4.transformMat4(nearPoint, dragStartCameraInvViewProj);
+    const farWorld = vec4.transformMat4(farPoint, dragStartCameraInvViewProj);
+    
+    const nearPos = vec3.fromValues(
+      nearWorld[0] / nearWorld[3],
+      nearWorld[1] / nearWorld[3],
+      nearWorld[2] / nearWorld[3]
+    );
+    
+    const farPos = vec3.fromValues(
+      farWorld[0] / farWorld[3],
+      farWorld[1] / farWorld[3],
+      farWorld[2] / farWorld[3]
+    );
+    
+    const rayDir = vec3.normalize(vec3.sub(farPos, nearPos));
+    const t = dragPlaneDistance;
+    newLightPosWorld = vec3.add(dragStartCameraPos, vec3.mulScalar(rayDir, t));
+  } else {
+    // Constrained movement using screen space deltas
+    newLightPosWorld = vec3.copy(dragStartLightPos);
+    
+    if (dragAxis === 'horizontal') {
+      // Horizontal cross arm (X axis): use horizontal mouse movement (INVERTED)
+      newLightPosWorld[0] = dragStartLightPos[0] - deltaX; // World X (left/right) - inverted
+    } else if (dragAxis === 'vertical') {
+      // Vertical cross arm (Z axis): use vertical mouse movement
+      newLightPosWorld[1] = dragStartLightPos[1] - deltaY; // World Y (up/down)
+    }
+  }
+  
+  // Update settings with correct coordinate mapping
+  // World space: X=left/right, Y=up/down, Z=depth
+  // User space: X=left/right, Z=up/down, Y=depth
+  settings.pointLightX = newLightPosWorld[0];  // X stays as X (left/right)
+  settings.pointLightZ = newLightPosWorld[1];  // World Y -> User Z (up/down)
+  settings.pointLightY = newLightPosWorld[2];  // World Z -> User Y (depth)
+});
+
+canvas.addEventListener('mouseup', () => {
+  if (isDraggingLight) {
+    isDraggingLight = false;
+    dragAxis = 'none';
+    canvas.style.cursor = 'pointer';
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  if (isDraggingLight) {
+    isDraggingLight = false;
+    dragAxis = 'none';
+    canvas.style.cursor = 'default';
+  }
+});
 
 requestAnimationFrame(frame);

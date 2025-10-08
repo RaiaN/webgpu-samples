@@ -1,5 +1,5 @@
 /**
- * Frame exporter utility for capturing rendered frames as PNG files
+ * Frame exporter utility for capturing rendered frames as JPEG files
  */
 
 export interface FrameExportOptions {
@@ -74,7 +74,7 @@ export class FrameExporter {
       // Wait for GPU work to complete
       await this.device.queue.onSubmittedWorkDone();
 
-      // Capture canvas as blob
+      // Capture canvas as blob with maximum quality
       const blob = await new Promise<Blob>((resolve, reject) => {
         this.canvas.toBlob(
           (blob) => {
@@ -84,7 +84,8 @@ export class FrameExporter {
               reject(new Error('Failed to create blob from canvas'));
             }
           },
-          'image/png'
+          'image/jpeg',
+          1.0  // Maximum quality
         );
       });
 
@@ -127,8 +128,9 @@ export class FrameExporter {
     // Download all frames
     for (let i = 0; i < this.capturedFrames.length; i++) {
       const blob = this.capturedFrames[i];
-      const frameNumber = String(i).padStart(6, '0');
-      const filename = `${this.options.outputPrefix}_${frameNumber}.png`;
+      const frameNumber = String(i).padStart(4, '0');
+      // Use the same format as input images: 0000.0xxx.basecolor.jpg
+      const filename = `${this.options.outputPrefix}.${frameNumber}.basecolor.jpg`;
       
       await this.downloadBlob(blob, filename);
       

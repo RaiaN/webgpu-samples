@@ -51,15 +51,8 @@ quitIfWebGPUNotAvailable(adapter, device);
 
 const context = canvas.getContext('webgpu') as GPUCanvasContext;
 
-const devicePixelRatio = window.devicePixelRatio;
-canvas.width = canvas.clientWidth * devicePixelRatio;
-canvas.height = canvas.clientHeight * devicePixelRatio;
-const aspect = canvas.width / canvas.height;
+// Canvas will be resized after loading images to match their resolution
 const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-context.configure({
-  device,
-  format: presentationFormat,
-});
 
 // Load external G-Buffer textures (Image sequence)
 let gBufferTextures: ImageGBufferTextures;
@@ -95,6 +88,25 @@ async function loadGbufferAssets() {
 }
 
 await loadGbufferAssets();
+
+// Resize canvas to match input image resolution
+const imageWidth = gBufferTextures.basecolor.width;
+const imageHeight = gBufferTextures.basecolor.height;
+canvas.width = imageWidth;
+canvas.height = imageHeight;
+
+// Also set display size to match (or maintain aspect ratio)
+canvas.style.width = `${imageWidth}px`;
+canvas.style.height = `${imageHeight}px`;
+
+const aspect = canvas.width / canvas.height;
+console.log(`Canvas resized to match input images: ${imageWidth}x${imageHeight}`);
+
+// Configure WebGPU context
+context.configure({
+  device,
+  format: presentationFormat,
+});
 
 // Initialize frame exporter
 const frameExporter = new FrameExporter(canvas, device);
@@ -407,7 +419,7 @@ const settings = {
   // Frame export settings
   exportFrames: false,
   exportFPS: 30,
-  exportPrefix: 'frame',
+  exportPrefix: '0000',
   exportTotalFrames: 0, // Will be calculated from image sequence
   // Directional light 0 controls (main sun)
   light0Azimuth: 135, // Horizontal angle in degrees (0 = +X, 90 = +Z, 180 = -X, 270 = -Z)
@@ -643,7 +655,7 @@ sequenceFolder.add({
 settings.exportTotalFrames = imageSequenceController.getTotalFrames();
 
 // Frame Export Controls
-const exportFolder = gui.addFolder('Frame Export (PNG)');
+const exportFolder = gui.addFolder('Frame Export (JPEG Max Quality)');
 exportFolder.add(settings, 'exportFPS', 1, 60, 1).name('Target FPS');
 exportFolder.add(settings, 'exportTotalFrames').name('Total Frames').listen();
 exportFolder.add(settings, 'exportPrefix').name('Filename Prefix');

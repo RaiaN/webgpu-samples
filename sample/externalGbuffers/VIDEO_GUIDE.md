@@ -30,11 +30,11 @@ import { loadGBufferVideos, VideoGBufferConfig } from './videoLoader';
 
 // Configure your video files
 const videoConfig: VideoGBufferConfig = {
-  albedo: 'my_scene_albedo.mp4',    // Base color video
-  depth: 'my_scene_depth.mp4',      // Depth buffer video  
-  metallic: 'my_scene_metallic.mp4', // Metallic values video
-  normal: 'my_scene_normal.mp4',    // Normal map video
-  roughness: 'my_scene_roughness.mp4' // Roughness values video
+  albedo: 'albedo.mp4',    // Base color video
+  depth: 'depth.mp4',      // Depth buffer video  
+  metallic: 'metallic.mp4', // Metallic values video
+  normal: 'normal.mp4',    // Normal map video
+  roughness: 'roughness.mp4' // Roughness values video
 };
 
 // Load videos
@@ -113,11 +113,11 @@ The integrated GUI provides:
 async function setupGBuffers() {
   if (useVideoMode) {
     const videoConfig: VideoGBufferConfig = {
-      albedo: 'scene_colors.mp4',
-      depth: 'scene_depth.mp4', 
-      metallic: 'scene_metallic.mp4',
-      normal: 'scene_normal.mp4',
-      roughness: 'scene_roughness.mp4'
+      albedo: 'colors.mp4',
+      depth: 'depth.mp4', 
+      metallic: 'metallic.mp4',
+      normal: 'normal.mp4',
+      roughness: 'roughness.mp4'
     };
     
     gBufferTextures = await loadGBufferVideos(device, videoConfig, '../../assets/gbuffers/');

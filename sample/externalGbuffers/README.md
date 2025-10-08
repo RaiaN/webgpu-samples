@@ -57,11 +57,11 @@ Place the following video files in a folder called `assets/gbuffers/` (relative 
 project-root/
 ├── assets/
 │   └── videos/
-│       ├── albedo_colors.mp4
-│       ├── normal_maps.mp4
-│       ├── depth_buffer.mp4
-│       ├── metallic_values.mp4
-│       └── roughness_values.mp4
+│       ├── albedo.mp4
+│       ├── normal.mp4
+│       ├── depth.mp4
+│       ├── metallic.mp4
+│       └── roughness.mp4
 └── sample/
     └── externalGbuffers/
         ├── index.html

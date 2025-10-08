@@ -66,11 +66,11 @@ let videoElements: any = null;
 async function loadGbufferAssets() {
   // Video G-Buffer configuration
   const videoConfig: VideoGBufferConfig = {
-    albedo: 'albedo_colors.mp4',
-    depth: 'depth_buffer.mp4', 
-    metallic: 'metallic_values.mp4',
-    normal: 'normal_maps.mp4',
-    roughness: 'roughness_values.mp4'
+    albedo: 'albedo.mp4',
+    depth: 'depth.mp4', 
+    metallic: 'metallic.mp4',
+    normal: 'normal.mp4',
+    roughness: 'roughness.mp4'
   };
 
   try {
@@ -82,11 +82,11 @@ async function loadGbufferAssets() {
   } catch (error) {
     console.error('Failed to load G-Buffer video textures:', error);
     console.log('Please ensure the following video files exist in ./assets/gbuffers/:');
-    console.log('- albedo_colors.mp4');
-    console.log('- normal_maps.mp4');
-    console.log('- depth_buffer.mp4');
-    console.log('- metallic_values.mp4');
-    console.log('- roughness_values.mp4');
+    console.log('- albedo.mp4');
+    console.log('- normal.mp4');
+    console.log('- depth.mp4');
+    console.log('- metallic.mp4');
+    console.log('- roughness.mp4');
     throw error;
   }
 }

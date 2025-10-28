@@ -68,23 +68,13 @@ async function loadGbufferAssets() {
     roughness: true
   };
 
-  try {
-    const result = await loadGBufferImages(device, imageConfig, '../../assets/gbuffers/4/');
-    gBufferTextures = result.textures;
-    imageSequenceController = result.controller;
-    console.log('Successfully loaded G-Buffer image sequence');
-    console.log(`Total frames: ${imageSequenceController.getTotalFrames()}`);
-    console.log('Use GUI controls to adjust playback');
-  } catch (error) {
-    console.error('Failed to load G-Buffer image sequence:', error);
-    console.log('Please ensure image sequence files exist in ./assets/gbuffers/4/:');
-    console.log('- 0000.0xxx.basecolor.jpg');
-    console.log('- 0000.0xxx.normal.jpg');
-    console.log('- 0000.0xxx.depth.jpg');
-    console.log('- 0000.0xxx.metallic.jpg');
-    console.log('- 0000.0xxx.roughness.jpg');
-    throw error;
-  }
+  const pathToUse = '../../assets/gbuffers/tractor/';
+  const result = await loadGBufferImages(device, imageConfig, pathToUse);
+  gBufferTextures = result.textures;
+  imageSequenceController = result.controller;
+  console.log('Successfully loaded G-Buffer image sequence');
+  console.log(`Total frames: ${imageSequenceController.getTotalFrames()}`);
+  console.log('Use GUI controls to adjust playback');
 }
 
 await loadGbufferAssets();
